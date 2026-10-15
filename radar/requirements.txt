@@ -1,0 +1,2 @@
+# So o audio da torre precisa de biblioteca extra; o resto do server.py usa apenas a biblioteca padrao do Python.
+miniaudio>=1.59

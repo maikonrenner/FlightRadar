@@ -1,0 +1,18 @@
+# Dados pessoais: NUNCA versionar
+radar_esp/secrets.h
+radar/opensky_credentials.json
+
+# Cache gerado pelo server.py (lista de aeroportos e canais da LiveATC)
+radar/cache/
+
+# Python / sistema
+__pycache__/
+*.pyc
+.atc_edge/
+Thumbs.db
+.DS_Store
+
+# Builds do Arduino
+build/
+*.bin
+*.elf
