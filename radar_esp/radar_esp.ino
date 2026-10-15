@@ -2,7 +2,8 @@
 // O proprio ESP32 busca os avioes perto de casa (adsb.lol, sem chave) e serve o radar
 // em http://radar.local (tela redonda 466x466 ou retangular 320x240, desenhada no navegador).
 // LED GPIO2 pisca quando um aviao entra na zona de alerta; buzzer passivo no GPIO25. BOOT = liga/desliga o alerta.
-// Configuracao pessoal (Wi-Fi, casa, PC): copie secrets.example.h para secrets.h e preencha.
+// Torre de controle: o ESP descobre os canais da LiveATC e repassa o audio pela porta 81; quem toca e o navegador.
+// Configuracao pessoal (Wi-Fi, casa): copie secrets.example.h para secrets.h e preencha.
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
@@ -25,9 +26,6 @@
 #define HOME_LAT 0.0
 #define HOME_LON 0.0
 #define HOME_CITY ""
-#endif
-#ifndef PC_URL
-#define PC_URL ""
 #endif
 
 // Wi-Fi e casa ficam salvos na flash (menu Reglages > Appareil); o secrets.h so serve de padrao.
@@ -272,7 +270,7 @@ void savePrefs() { prefs.putBool("alert", alertOn); prefs.putBool("sound", sound
 
 void sendPlanes() {
   JsonDocument d;
-  d["lat"] = homeLat; d["lon"] = homeLon; d["city"] = homeCity; d["pc"] = PC_URL;   // PC com o server.py (audio da torre)
+  d["lat"] = homeLat; d["lon"] = homeLon; d["city"] = homeCity;
   d["src"] = locSrc; d["acc"] = locAcc; d["ssid"] = wifiSsid; d["ap"] = apMode; d["apName"] = apName;
   d["online"] = WiFi.status() == WL_CONNECTED;
   d["ok"] = dataAt && millis() - dataAt < 90000;  // um 429 isolado nao apaga o radar
@@ -350,6 +348,137 @@ void sendInfo() {
   server.send(200, "application/json", out);
 }
 
+// ---------- torre de controle (LiveATC)
+// Um canal existe se o .pls dele (o link oficial para players de midia) devolve uma playlist.
+// A descoberta roda numa tarefa separada e guarda o resultado na flash (namespace "atc", chave = ICAO).
+const char* ATC_UA = "esp32-desk-radar/1.0 (hobby)";   // com agente de navegador a LiveATC pede o desafio do Cloudflare
+const char* SUFFIXES[] = {"", "1", "2", "3", "_twr", "_twr1", "_twr2", "_twr3", "_app", "_app2", "_dep", "_gnd", "_del", "_ctr",
+                          "_atis", "_ramp", "_ctaf", "_co"};
+volatile bool discBusy = false;
+WiFiServer atcSrv(81);
+
+void discoverTask(void* arg) {
+  String* list = (String*)arg;
+  Preferences p; p.begin("atc", false);
+  WiFiClientSecure tls; tls.setInsecure();
+  HTTPClient http; http.setReuse(true); http.setTimeout(8000);
+  for (int start = 0; start < (int)list->length();) {
+    int e = list->indexOf(',', start); if (e < 0) e = list->length();
+    String icao = list->substring(start, e); start = e + 1;
+    String lc = icao; lc.toLowerCase();
+    JsonDocument d; JsonArray arr = d.to<JsonArray>();
+    for (const char* s : SUFFIXES) {
+      String mount = lc + s;
+      if (!http.begin(tls, "https://www.liveatc.net/play/" + mount + ".pls")) continue;
+      http.setUserAgent(ATC_UA);
+      String t = http.GET() == 200 ? http.getString() : "";
+      http.end();
+      if (!t.startsWith("[playlist]")) continue;
+      String title = mount;
+      int i = t.indexOf("Title1=");
+      if (i >= 0) { int j = t.indexOf('\n', i); title = t.substring(i + 7, j < 0 ? t.length() : j); title.trim(); }
+      bool dup = false;   // mesmo canal com dois mounts (ex.: cyul_twr e cyul_twr2): fica o primeiro
+      for (JsonObject o : arr) if (title.equalsIgnoreCase(o["t"].as<const char*>())) dup = true;
+      if (dup) continue;
+      JsonObject o = arr.add<JsonObject>(); o["m"] = mount; o["t"] = title;
+    }
+    String out; serializeJson(d, out);
+    p.putString(icao.c_str(), out);
+    Serial.printf("LiveATC %s: %d canal(is) (heap livre %u)\n", icao.c_str(), arr.size(), ESP.getFreeHeap());
+  }
+  p.end();
+  delete list;
+  discBusy = false;
+  vTaskDelete(NULL);
+}
+
+// /atc/feeds?icao=CYUL,CYHU,...  (a pagina manda os aeroportos mais perto, do mais perto para o mais longe)
+void sendAtcFeeds() {
+  String icaos = server.arg("icao"), missing;
+  Preferences p; p.begin("atc", true);
+  JsonDocument d; JsonArray feeds = d["feeds"].to<JsonArray>();
+  for (int start = 0; start < (int)icaos.length();) {
+    int e = icaos.indexOf(',', start); if (e < 0) e = icaos.length();
+    String icao = icaos.substring(start, e); start = e + 1;
+    if (icao.length() != 4) continue;
+    if (!p.isKey(icao.c_str())) { if (missing.length()) missing += ','; missing += icao; continue; }
+    JsonDocument f;
+    if (deserializeJson(f, p.getString(icao.c_str()))) continue;
+    for (JsonObject o : f.as<JsonArray>()) {
+      JsonObject x = feeds.add<JsonObject>();
+      x["icao"] = icao; x["mount"] = String(o["m"] | ""); x["title"] = String(o["t"] | "");
+    }
+  }
+  p.end();
+  if (missing.length() && !discBusy && WiFi.status() == WL_CONNECTED) {
+    discBusy = true;
+    xTaskCreatePinnedToCore(discoverTask, "atcDisc", 12288, new String(missing), 1, NULL, 0);
+  }
+  d["pending"] = missing.length() > 0;
+  String out; serializeJson(d, out);
+  server.send(200, "application/json", out);
+}
+
+// Repassa o stream MP3 (16 kbps) para o navegador: http://radar.local:81/<mount>. Um ouvinte por vez;
+// uma conexao nova (troca de canal) derruba a anterior.
+void relayAtc(WiFiClient& cli, const String& mount) {
+  String url = "http://d.liveatc.net/" + mount;
+  {   // d.liveatc.net redireciona para o servidor do stream (HTTPS)
+    HTTPClient h; h.setTimeout(8000);
+    const char* keys[] = {"Location"}; h.collectHeaders(keys, 1);
+    if (h.begin(url)) {
+      h.setUserAgent(ATC_UA);
+      int c = h.GET();
+      if ((c == 301 || c == 302) && h.header("Location").length()) url = h.header("Location");
+    }
+    h.end();
+  }
+  WiFiClientSecure tls; tls.setInsecure();
+  WiFiClient plain;
+  HTTPClient h; h.setTimeout(10000); h.useHTTP10(true);
+  bool ok = url.startsWith("https") ? h.begin(tls, url) : h.begin(plain, url);
+  if (ok) h.setUserAgent(ATC_UA);
+  int code = ok ? h.GET() : -1;
+  if (code != 200) {
+    Serial.printf("Torre %s: HTTP %d\n", mount.c_str(), code);
+    cli.print("HTTP/1.1 502 Bad Gateway\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n");
+    h.end(); return;
+  }
+  // CORS liberado: o navegador precisa ler o audio para desenhar a onda de fala
+  cli.print("HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+  Serial.printf("Torre: tocando %s (heap livre %u)\n", mount.c_str(), ESP.getFreeHeap());
+  auto* s = h.getStreamPtr();
+  uint8_t buf[1024];
+  unsigned long last = millis();
+  while (cli.connected() && !atcSrv.hasClient()) {
+    int n = s->available();
+    if (n > 0) {
+      n = s->read(buf, min(n, (int)sizeof buf));
+      if (n > 0) { cli.write(buf, n); last = millis(); }
+    } else if (!s->connected() || millis() - last > 15000) break;   // stream caiu: o navegador reconecta
+    else delay(10);
+  }
+  h.end();
+  Serial.println("Torre: parou");
+}
+
+void atcRelayTask(void*) {
+  for (;;) {
+    WiFiClient cli = atcSrv.accept();
+    if (!cli) { delay(50); continue; }
+    cli.setTimeout(2);
+    String req = cli.readStringUntil('\n');   // "GET /cyul_twr HTTP/1.1"
+    while (cli.connected()) { String hl = cli.readStringUntil('\n'); if (hl.length() <= 1) break; }
+    int a = req.indexOf('/'), b = req.indexOf(' ', a);
+    String mount = a < 0 || b < 0 ? "" : req.substring(a + 1, b);
+    bool valid = mount.length() >= 3 && mount.length() <= 24;
+    for (char c : mount) if (!isalnum((unsigned char)c) && c != '_') valid = false;
+    if (valid) relayAtc(cli, mount);
+    else cli.print("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n");
+    cli.stop();
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   prefs.begin("radar", false);
@@ -398,8 +527,11 @@ void setup() {
     if (apMode) { server.sendHeader("Location", "http://192.168.4.1/"); server.send(302); }
     else server.send(404, "text/plain", "404");
   });
+  server.on("/atc/feeds", HTTP_GET, sendAtcFeeds);
   if (soundOn) beep(1);  // bipe de "liguei"
   server.begin();
+  atcSrv.begin();
+  xTaskCreatePinnedToCore(atcRelayTask, "atcRelay", 12288, NULL, 1, NULL, 0);
 }
 
 void loop() {

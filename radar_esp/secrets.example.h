@@ -9,6 +9,3 @@
 #define HOME_LAT  0.0
 #define HOME_LON  0.0
 #define HOME_CITY "casa"
-
-// PC na mesma rede rodando radar/server.py (audio da torre). Deixe "" se nao for usar.
-#define PC_URL "http://192.168.1.10:8080"

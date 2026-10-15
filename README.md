@@ -7,7 +7,7 @@ O projeto tem duas partes:
 | Parte | Pasta | O que faz |
 |---|---|---|
 | **Radar de mesa** (o aparelho) | [`radar_esp/`](radar_esp) | Firmware do ESP32: busca os aviões, calcula o alerta de aproximação e serve a tela do radar em `http://radar.local`. |
-| **Estação no PC** (opcional) | [`radar/`](radar) | `server.py` + um radar **3D estilo Flightradar24** (Three.js) com tráfego mundial, clima e rotas. É ele também que toca o **áudio da torre** nas caixas de som. |
+| **Estação no PC** (opcional) | [`radar/`](radar) | `server.py` + um radar **3D estilo Flightradar24** (Three.js) com tráfego mundial, clima e rotas. |
 
 > A interface do aparelho está em **francês** (feito em Québec 🇨🇦). Este README está em português.
 
@@ -44,7 +44,7 @@ O projeto tem duas partes:
   - **Classique**: radar verde com varredura; o nome do voo aparece quando a varredura passa e some em seguida.
 - 📋 **Toque num avião** → cartão com **companhia aérea**, **modelo**, **origem → destino**, altitude, velocidade e distância.
 - 🔔 **Alerta de aproximação** com zonas configuráveis, posição conferida a cada segundo e memória para não repetir (detalhes [abaixo](#alerta-de-aproximação)). Borda da tela pisca em vermelho, LED da placa pisca e o buzzer apita.
-- 📻 **Rádio da torre de controle** do aeroporto mais próximo (via PC), com uma **onda de fala** no radar que só aparece enquanto alguém está falando.
+- 📻 **Rádio da torre de controle** do aeroporto mais próximo (o próprio ESP32 repassa o áudio, sem PC), com uma **onda de fala** no radar que só aparece enquanto alguém está falando.
 - 📶 **Configuração de Wi-Fi pela própria tela** e **modo de configuração** automático (para levar o aparelho a qualquer lugar).
 - 📍 **Localização sem GPS**: pelas redes Wi-Fi vizinhas, pelo IP ou pela cidade digitada.
 - 🗺️ Mapa escuro de fundo, aviões no solo (opcional), km ou milhas, tela redonda ou retangular (CYD 2,8").
@@ -86,14 +86,14 @@ Para o rádio da torre com o **seu próprio receptor** (em vez da LiveATC), veja
   │  • busca aviões / 15 s   │         │  aberta em http://radar.local         │
   │  • alerta a cada 1 s     │ ◀────── │  no celular, PC ou (futuro) na própria│
   │  • Wi-Fi / posição       │  toques │  tela AMOLED do aparelho              │
-  │  • LED + buzzer          │         └───────────────┬───────────────────────┘
-  └──────────────────────────┘                         │ áudio da torre
-                                                       ▼ (opcional)
+  │  • LED + buzzer          │ ──────▶ │  • toca o áudio da torre              │
+  │  • canais LiveATC +      │  MP3    │  • detecta fala → onda no radar       │
+  │    repasse do áudio (:81)│         └───────────────────────────────────────┘
+  └──────────────────────────┘
                                      ┌───────────────────────────────────────┐
-                                     │  PC: radar/server.py                  │
-                                     │  • descobre canais LiveATC próximos   │
-                                     │  • toca o rádio nas caixas de som     │
-                                     │  • detecta fala → onda no radar       │
+                                     │  PC (opcional): radar/server.py       │
+                                     │  • radar 3D, tráfego mundial, clima   │
+                                     │  • áudio da torre nas caixas do PC    │
                                      │  • radar 3D em http://localhost:8080  │
                                      └───────────────────────────────────────┘
 ```
@@ -129,7 +129,6 @@ e preencha:
 #define HOME_LAT  0.0        // 0 e 0 = descobre a posição sozinho
 #define HOME_LON  0.0
 #define HOME_CITY "casa"
-#define PC_URL "http://192.168.1.10:8080"   // PC com o server.py (áudio da torre); "" se não usar
 ```
 
 > 🔒 `secrets.h` está no `.gitignore`: a senha do seu Wi-Fi nunca vai para o repositório.
@@ -201,7 +200,7 @@ A320 YYZ      ← tipo do avião + destino (quando já carregado)
 | Zone d'alerte | 2 km · 3.000 pés / **5 km · 5.000 pés** / 10 km · 10.000 pés | Tamanho da zona de alerta. |
 | Carte de fond | ligado/desligado | Mapa escuro no fundo. |
 | Avions au sol | ligado/desligado | Mostra os aviões no chão (cinza, etiqueta "SOL"). |
-| Tour de contrôle | canal tocando ou *Arrêt* | Abre a **janela de canais** da torre (veja abaixo). Mostra **"PC hors ligne"** se o PC não responder. |
+| Tour de contrôle | canal tocando ou *Arrêt* | Abre a **janela de canais** da torre (veja [Áudio da torre](#áudio-da-torre)). |
 | Style | Contrôleur / Classique | Estilo da tela redonda. |
 | Unités | km / mi | Unidades do cartão e do alcance clássico. |
 | Écran | Rond / Rectangulaire | Tela redonda (AMOLED) ou retangular (CYD). |
@@ -250,15 +249,17 @@ cp radar/opensky_credentials.example.json radar/opensky_credentials.json
 > 🔒 `opensky_credentials.json` está no `.gitignore`. O segredo fica só no PC — nunca vai para a página nem para o ESP32.
 
 ### Áudio da torre
-1. Coloque o endereço do PC em `PC_URL` no `secrets.h` (ex.: `http://192.168.1.10:8080`).
-2. No radar: **⚙ → Radar → Tour de contrôle**. Abre uma janela com os canais **agrupados por aeroporto**, do mais perto para o mais longe:
+Não precisa do PC: o próprio ESP32 cuida disso, e o som sai **no aparelho que abriu a página** (PC, celular ou, no futuro, a tela redonda com alto-falante).
+1. No radar: **⚙ → Radar → Tour de contrôle**. Abre uma janela com os canais **agrupados por aeroporto**, do mais perto para o mais longe:
    - toque num canal para ouvir (ele fica em verde com 🔊);
    - toque nele de novo, ou em **■ Arrêter le son**, para parar.
-3. O `server.py`:
-   - procura os **aeroportos grandes até 150 km** (médios até 60 km) da posição do aparelho ([OurAirports](https://ourairports.com));
-   - descobre quais canais existem na LiveATC pelos links `.pls` oficiais (cache em `radar/cache/`);
-   - toca o stream nas caixas de som do PC (decodificado com [miniaudio](https://github.com/irmen/pyminiaudio)), reconectando sozinho se cair;
-   - mede o volume e avisa o radar quando **alguém está falando** → aparece a **onda de fala** ("TRANSMISSION") embaixo do radar.
+2. O ESP32:
+   - recebe da página os **6 aeroportos mais perto (até 100 km)** da posição do aparelho ([OurAirports](https://ourairports.com));
+   - descobre quais canais existem na LiveATC pelos links `.pls` oficiais (leva ~1 min por aeroporto na primeira vez; o resultado fica salvo na flash);
+   - repassa o stream MP3 (16 kbps) em `http://radar.local:81/<canal>`, um ouvinte por vez.
+3. A página toca o áudio, mede o volume e mostra a **onda de fala** ("TRANSMISSION") embaixo do radar quando **alguém está falando**; se o stream cair, reconecta em 5 s.
+
+O `server.py` continua tocando a torre nas caixas do PC para o radar 3D (`/api/atc/…`, com [miniaudio](https://github.com/irmen/pyminiaudio)).
 
 > Silêncio no canal é normal: a frequência só tem som quando um piloto ou o controlador fala. De madrugada pode ficar minutos sem nada.
 >
@@ -296,6 +297,8 @@ Endpoints HTTP servidos pelo ESP32 (úteis para integrar com outras coisas):
 | POST | `/wifi/save` (`ssid`, `pass`) | Salva a rede e reinicia |
 | POST | `/locate` (`method=wifi\|ip`) | Detecta a posição |
 | POST | `/location` (`lat`, `lon`, `city`) | Define a posição manualmente |
+| GET | `/atc/feeds?icao=CYUL,CYHU` | Canais da LiveATC desses aeroportos (`pending` = descoberta em andamento) |
+| GET | `:81/<canal>` | Áudio da torre (MP3, CORS liberado) |
 
 E pelo `server.py` (PC): `/api/atc/feeds?lat&lon`, `/api/atc/start?feed=`, `/api/atc/stop`, `/api/atc/level`, além das rotas do radar 3D (`/api/local`, `/api/global`, `/api/route/…`, `/api/aircraft/…`, `/api/metar`, `/api/wx`…).
 

@@ -56,8 +56,8 @@ async function loadAirports(lat,lon){
 }
 let pref={};try{pref=JSON.parse(localStorage.getItem('radar_esp')||'{}')}catch(e){}
 let units=pref.units||'metric',rangeIdx=pref.rangeIdx??2,mode=pref.mode||'round',mapOn=pref.mapOn??true,style=pref.style||'atc',groundOn=pref.groundOn??false,actx=null,menuOpen=false;
-// PC com o server.py (radar 3D): ele abre o audio da torre de controle nas caixas de som do PC
-let PC='',apShown=false;let atc={on:false,available:false,reach:false};   // PC vem do ESP (PC_URL no secrets.h)
+// torre de controle: o ESP repassa o audio da LiveATC (porta 81) e o navegador toca no aparelho que abriu a pagina
+let apShown=false;let atc={on:false,feed:null,live:false};
 const savePref=()=>{try{localStorage.setItem('radar_esp',JSON.stringify({units,rangeIdx,mode,mapOn,style,groundOn}))}catch(e){}};
 let D={planes:[],alerting:0,alertOn:true,soundOn:true},recvAt=0,selHex=null,lastAlert=0,conn=false;
 const info={};   // hex -> {model, orig, dest} vindo do ESP (/info)
@@ -270,7 +270,7 @@ const SRC={wifi:'Wi-Fi',ip:'IP',manuel:'manuel',secrets:'config'};
 const menuRows=()=>menuTab==='radar'?[
   ['Son',D.soundOn,'sw'],['Alerte de proximité',D.alertOn,'sw'],['Zone d’alerte',`${D.aKm||5} km · ${fr(D.aFt||5000)} pi`,'val'],
   ['Carte de fond',mapOn,'sw'],['Avions au sol',groundOn,'sw'],
-  ['Tour de contrôle',atc.on?feedName(atc.feed):atcFeeds.length?'Arrêt':feedsPending?'recherche…':'aucune',atc.reach?'val':'off'],
+  ['Tour de contrôle',atc.on?feedName(atc.feed):atcFeeds.length?'Arrêt':feedsPending?'recherche…':'aucune','val'],
   ['Style',style==='atc'?'Contrôleur':'Classique','val'],['Unités',units==='metric'?'km':'mi','val'],
   ['Écran',mode==='round'?'Rond':'Rectangulaire','val'],['Tester le bip','▶','val'],['Fermer','','close']]:[
   ['Réseau Wi-Fi',D.ap?'à configurer':(D.ssid||'—'),'val'],
@@ -293,8 +293,7 @@ function drawMenu(d){
     const y=m.row0+i*m.step,xl=m.x+18,xr=m.x+m.w-18;
     if(kind==='close'){d.fillRoundRect(m.x+m.w/2-50,y-m.step*.38,100,m.step*.76,m.step*.38,'#18212c');d.text(label,m.x+m.w/2,y,m.fs-1,C.text,'center',true);return}
     d.text(label,xl,y,m.fs-1,C.text);
-    if(kind==='off')d.text('PC hors ligne',xr,y,m.fs-2,'#ff6b6b','right');   // server.py nao respondeu
-    else if(kind==='sw'){const h=m.fs+6,w=h*1.8;d.fillRoundRect(xr-w,y-h/2,w,h,h/2,v?C.on:C.off);d.fillCircle(v?xr-h/2:xr-w+h/2,y,h/2-3,'#fff')}
+    if(kind==='sw'){const h=m.fs+6,w=h*1.8;d.fillRoundRect(xr-w,y-h/2,w,h,h/2,v?C.on:C.off);d.fillCircle(v?xr-h/2:xr-w+h/2,y,h/2-3,'#fff')}
     else{d.g.font=`700 ${m.fs-1}px system-ui,sans-serif`;let t=String(v);while(t.length>3&&d.g.measureText(t).width>m.w*.5)t=t.slice(0,-2)+'…';
       d.text(t,xr,y,m.fs-1,kind==='info'?C.dim:C.accent,'right',true)}
     if(i<rows.length-2)d.drawLine(xl,y+m.step/2,xr,y+m.step/2,'rgba(255,255,255,.06)');
@@ -321,25 +320,39 @@ async function menuTap(x,y){
   else if(i===9){fetch('/beep',{method:'POST'});beep(true)}
   else if(i===10)menuOpen=false;
 }
-// ---------- torre de controle: o server.py do PC descobre os canais da LiveATC dos aeroportos perto da casa
-// e toca nas caixas do PC (a frequencia de radio so tem som quando alguem fala: silencio e normal)
-let atcFeeds=[],atcAirport=null,feedsPending=false,feedsKey='';
+// ---------- torre de controle: o ESP descobre os canais da LiveATC dos aeroportos perto da casa (fica salvo
+// na flash) e repassa o audio; a frequencia de radio so tem som quando alguem fala: silencio e normal
+let atcFeeds=[],atcAirport=null,feedsPending=false,feedsKey='',feedsAt=0;
 const feedName=m=>{const f=atcFeeds.find(f=>f.mount===m);return f?f.title:(m||'—')};
 async function loadFeeds(){
-  if(!PC||(!D.lat&&!D.lon))return;
-  const key=D.lat.toFixed(2)+','+D.lon.toFixed(2);
-  if(key===feedsKey&&!feedsPending)return;
+  if(!APTS.length||(!D.lat&&!D.lon))return;   // espera a lista de aeroportos (loadAirports)
+  const k=Math.cos(D.lat*Math.PI/180);
+  const near=APTS.map(a=>({icao:a[0],km:Math.hypot((a[1]-D.lat)*111,(a[2]-D.lon)*111*k)}))
+    .filter(a=>a.km<=100).sort((a,b)=>a.km-b.km).slice(0,6);
+  const key=near.map(a=>a.icao).join(',');
+  if(!key||(key===feedsKey&&!feedsPending)||Date.now()-feedsAt<5000)return;   // a descoberta leva ~1 min: pergunta a cada 5 s
+  feedsAt=Date.now();
   try{
-    const j=await(await fetch(`${PC}/api/atc/feeds?lat=${D.lat}&lon=${D.lon}`,{cache:'no-store'})).json();
-    atcFeeds=j.feeds||[];atcAirport=(j.airports||[]).find(a=>atcFeeds.some(f=>f.icao===a.icao))||(j.airports||[])[0]||null;
+    const j=await(await fetch(`/atc/feeds?icao=${key}`,{cache:'no-store'})).json();
+    atcFeeds=j.feeds||[];atcAirport=near.find(a=>atcFeeds.some(f=>f.icao===a.icao))||near[0]||null;
     feedsPending=!!j.pending;feedsKey=key;
-    if(feedsPending)setTimeout(loadFeeds,5000);   // a descoberta roda no PC; pergunta de novo
   }catch(e){}
 }
-async function atcCall(action,feed=''){
-  if(!PC){atc={on:false,available:false,reach:false};return}
-  try{const r=await fetch(`${PC}/api/atc/${action}?feed=${feed}`,{cache:'no-store'});atc={...await r.json(),reach:true}}
-  catch(e){atc={on:false,available:false,reach:false}}
+let atcAudio=null,atcAn=null,atcBuf=null;
+function atcPlay(m){
+  atcStop();
+  try{actx=actx||new AudioContext();actx.resume()}catch(e){}
+  const a=new Audio();a.crossOrigin='anonymous';a.src=`http://${location.hostname}:81/${m}`;
+  a.onplaying=()=>{if(atcAudio===a)atc.live=true};
+  a.onerror=a.onended=()=>{if(atcAudio!==a)return;atc.live=false;setTimeout(()=>{if(atcAudio===a)atcPlay(m)},5000)};   // caiu: reconecta
+  atcAudio=a;atc={on:true,feed:m,live:false};
+  // analisador para a onda de fala (o ESP libera CORS, senao o navegador entregaria silencio)
+  try{const s=actx.createMediaElementSource(a);atcAn=actx.createAnalyser();atcAn.fftSize=2048;s.connect(atcAn);atcAn.connect(actx.destination);atcBuf=new Float32Array(atcAn.fftSize)}catch(e){atcAn=null}
+  a.play().catch(()=>{});
+}
+function atcStop(){
+  if(atcAudio){const a=atcAudio;atcAudio=null;a.onerror=a.onended=null;a.pause();a.removeAttribute('src');a.load()}
+  atcAn=null;atc={on:false,feed:null,live:false};voice.lv=[];voice.talk=false;
 }
 
 // ---------- janelas de texto (Wi-Fi e posicao): precisam de teclado, entao sao HTML por cima da tela
@@ -378,19 +391,19 @@ function openTower(){
   const el=dlg('<h3>Tour de contrôle</h3><div id="tw"></div><button data-close>Fermer</button>');
   const render=busy=>{
     const box=el.querySelector('#tw');if(!box)return;
-    if(!atc.reach){box.innerHTML='<p class="dim">Le PC avec <b>server.py</b> ne répond pas. Le son de la tour est joué par le PC.</p>';return}
     if(!atcFeeds.length){box.innerHTML=`<p class="dim">${feedsPending?'Recherche des canaux près de vous…':'Aucun canal trouvé près de vous.'}</p>`;if(feedsPending)setTimeout(()=>{loadFeeds().then(()=>render())},4000);return}
     // agrupado por aeroporto, do mais perto para o mais longe
     const groups=[];for(const f of atcFeeds){let g=groups.find(g=>g.icao===f.icao);if(!g)groups.push(g={icao:f.icao,feeds:[]});g.feeds.push(f)}
-    box.innerHTML=(atc.on?`<p>En écoute : <b>${escH(feedName(atc.feed))}</b></p><button id="ts" class="go">■ Arrêter le son</button>`:'<p class="dim">Choisissez un canal pour l’écouter sur les haut-parleurs du PC.</p>')
-      +groups.map(g=>`<p class="dim" style="margin:12px 0 0">${escH(g.icao)}</p><ul>${g.feeds.map(f=>`<li data-m="${escH(f.mount)}"${atc.on&&atc.feed===f.mount?' class="on"':''}><span>${escH(f.title.replace(g.icao,'').trim()||f.title)}</span><span>${atc.on&&atc.feed===f.mount?'🔊':busy===f.mount?'…':'▶'}</span></li>`).join('')}</ul>`).join('')
+    box.innerHTML=(atc.on?`<p>En écoute : <b>${escH(feedName(atc.feed))}</b></p><button id="ts" class="go">■ Arrêter le son</button>`:'<p class="dim">Choisissez un canal pour l’écouter sur cet appareil.</p>')
+      +groups.map(g=>`<p class="dim" style="margin:12px 0 0">${escH(g.icao)}</p><ul>${g.feeds.map(f=>`<li data-m="${escH(f.mount)}"${atc.on&&atc.feed===f.mount?' class="on"':''}><span>${escH(f.title.replace(g.icao,'').trim()||f.title)}</span><span>${atc.on&&atc.feed===f.mount?(atc.live?'🔊':'…'):'▶'}</span></li>`).join('')}</ul>`).join('')
       +'<p class="dim">Le silence est normal : on n’entend quelque chose que quand un pilote ou le contrôleur parle.</p>';
-    const ts=box.querySelector('#ts');if(ts)ts.onclick=async()=>{await atcCall('stop');render()};
-    box.onclick=async e=>{const li=e.target.closest('li[data-m]');if(!li)return;const m=li.dataset.m;
-      if(atc.on&&atc.feed===m){await atcCall('stop');render();return}   // tocar no canal que esta tocando = parar
-      render(m);await atcCall('start',m);render()};
+    const ts=box.querySelector('#ts');if(ts)ts.onclick=()=>{atcStop();render()};
+    box.onclick=e=>{const li=e.target.closest('li[data-m]');if(!li)return;const m=li.dataset.m;
+      if(atc.on&&atc.feed===m)atcStop();else atcPlay(m);   // tocar no canal que esta tocando = parar
+      render()};
+    if(atc.on&&!atc.live)setTimeout(render,500);   // conectando: atualiza quando o som comecar
   };
-  atcCall('status').then(()=>render());render();
+  render();
 }
 function openPosition(){
   menuOpen=false;
@@ -413,13 +426,17 @@ function openPosition(){
   el.querySelector('#ls').onclick=search;el.querySelector('#lq').onkeydown=e=>{if(e.key==='Enter')search()};
 }
 
-// ---------- onda de fala: quando a torre estiver tocando no PC, mostra as barras de volume
-// e "TRANSMISSION" enquanto alguem fala (o server.py detecta a voz acima do chiado do radio)
-let voice={talk:false,lv:[]};
-async function pollVoice(){
-  if(atc.on){try{voice=await(await fetch(`${PC}/api/atc/level`,{cache:'no-store'})).json()}catch(e){voice={talk:false,lv:[]}}}
-  setTimeout(pollVoice,atc.on?250:2000);
-}
+// ---------- onda de fala: quando a torre estiver tocando, mostra as barras de volume
+// e "TRANSMISSION" enquanto alguem fala (voz bem acima do chiado do radio, que e medido e se adapta)
+const voice={talk:false,lv:[],noise:200,talkAt:0};
+setInterval(()=>{   // volume (RMS, escala de 16 bits) em fatias de 100 ms
+  if(!atcAn)return;
+  atcAn.getFloatTimeDomainData(atcBuf);let s=0;for(const x of atcBuf)s+=x*x;
+  const rms=Math.sqrt(s/atcBuf.length)*32768,nz=voice.noise;
+  voice.noise=nz+(rms-nz)*(rms>nz?.002:.2);   // sobe bem devagar (fala longa nao vira "chiado"), desce rapido
+  if(rms>Math.max(voice.noise*3,350))voice.talkAt=performance.now();
+  voice.lv=[...voice.lv,Math.min(1,rms/12000)].slice(-30);voice.talk=performance.now()-voice.talkAt<800;
+},100);
 const talking=()=>atc.on&&voice.talk;
 function drawVoice(d,hasSel){
   if(!talking())return;   // so aparece quando alguem esta falando; no resto do tempo fica a contagem de avioes
@@ -453,7 +470,7 @@ async function loadInfo(p){
 function touch(cv,e,S,isRound){
   const b=cv.getBoundingClientRect(),W=cv.width,H=cv.height,x=(e.clientX-b.left)*W/b.width,y=(e.clientY-b.top)*H/b.height;
   if(menuOpen){menuTap(x,y);return}
-  const g=GEAR[mode];if(Math.hypot(x-g[0],y-g[1])<=g[2]+10){menuOpen=true;atcCall('status');return}
+  const g=GEAR[mode];if(Math.hypot(x-g[0],y-g[1])<=g[2]+10){menuOpen=true;return}
   const hit=isRound?(([bx,by,r])=>Math.hypot(x-bx,y-by)<=r+8):(r=>x>=r[0]&&x<=r[0]+r[2]&&y>=r[1]&&y<=r[1]+r[3]);
   if(hit(S.minus)){rangeIdx=Math.max(0,rangeIdx-1);savePref();return}
   if(hit(S.plus)){rangeIdx=Math.min(4,rangeIdx+1);savePref();return}
@@ -472,13 +489,12 @@ function beep(force){if(!actx||!(force||D.soundOn))return;const o=actx.createOsc
 async function poll(){
   try{
     D=await(await fetch('/planes',{cache:'no-store'})).json();recvAt=performance.now()-D.age*1000;conn=true;
-    if(D.pc&&!PC){PC=D.pc;atcCall('status')}
     if(D.lat||D.lon){loadAirports(D.lat,D.lon);loadFeeds()}
     if(D.ap&&!apShown){apShown=true;openWifi()}   // sem Wi-Fi configurado: ja abre a lista de redes
     if(D.alerting>lastAlert&&D.alertOn)beep();lastAlert=D.alerting;
     for(const h of hist.keys())if(!D.planes.some(p=>p.hex===h))hist.delete(h);
   }catch(e){conn=false}
 }
-setMode(mode);poll();setInterval(poll,2000);atcCall('status');setInterval(()=>atcCall('status'),15000);pollVoice();
+setMode(mode);poll();setInterval(poll,2000);
 (function loop(){draw();setTimeout(()=>requestAnimationFrame(loop),50)})();
 </script></body></html>)HTML";
