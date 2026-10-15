@@ -11,10 +11,10 @@ html,body{margin:0;background:#070b10;color:#a7b3c0;font:13px system-ui,sans-ser
 main{min-height:100vh;display:grid;place-items:center;padding:16px;box-sizing:border-box}
 canvas{display:block;touch-action:manipulation;cursor:pointer}
 canvas[hidden]{display:none}
-#dlg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;padding:16px;z-index:9}#dlg[hidden]{display:none}
-#dlg .box{background:#0e141c;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:16px;width:min(100%,380px);max-height:90vh;overflow:auto;color:#e6edf3}
-#dlg h3{margin:0 0 8px;color:#ffc400}#dlg p{margin:8px 0;font-size:13px}#dlg .dim{color:#7a8794}
-#dlg ul{list-style:none;margin:8px 0;padding:0;max-height:240px;overflow:auto}#dlg li{display:flex;justify-content:space-between;gap:8px;padding:10px 6px;border-bottom:1px solid rgba(255,255,255,.07);cursor:pointer}
+#dlg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9}#dlg[hidden]{display:none}
+#dlg .box{position:fixed;box-sizing:border-box;background:#0e141c;border:1px solid rgba(255,255,255,.1);overflow:auto;color:#e6edf3;font-size:12px;scrollbar-width:thin}
+#dlg h3{margin:0 0 6px;color:#ffc400;text-align:center;font-size:15px}#dlg p{margin:6px 0;font-size:12px}#dlg .dim{color:#7a8794}
+#dlg ul{list-style:none;margin:4px 0;padding:0}#dlg li{display:flex;justify-content:space-between;gap:8px;padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.07);cursor:pointer}
 #dlg li:hover{background:rgba(255,255,255,.05)}#dlg li.on{background:rgba(98,245,154,.12);color:#62f59a;font-weight:600}#dlg ul+ul{margin-top:0}#dlg input{width:100%;box-sizing:border-box;background:#070b10;color:#e6edf3;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px;font:14px system-ui;margin:4px 0}
 #dlg button{font:600 13px system-ui;color:#e6edf3;background:#18212c;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:9px 12px;cursor:pointer;margin-top:6px}#dlg button.go{background:#ffc400;color:#111;border-color:#ffc400}
 #dlg .row{display:flex;gap:8px;align-items:center}#dlg .row input{flex:1}
@@ -343,7 +343,17 @@ async function atcCall(action,feed=''){
 }
 
 // ---------- janelas de texto (Wi-Fi e posicao): precisam de teclado, entao sao HTML por cima da tela
-function dlg(html){const el=$('dlg');el.innerHTML=`<div class="box">${html}</div>`;el.hidden=false;el.onclick=e=>{if(e.target===el||e.target.dataset.close!==undefined)el.hidden=true};return el}
+// a janela fica DENTRO da tela: no quadrado inscrito no circulo (tela redonda) ou no retangulo, com rolagem interna
+function fitDlg(){
+  const el=$('dlg'),box=el.querySelector('.box');if(el.hidden||!box)return;
+  const r=(mode==='round'?$('round'):$('rect')).getBoundingClientRect();
+  // .68 do diametro: os cantos (arredondados) ficam dentro do circulo, com folga
+  const w=mode==='round'?r.width*.68:r.width*.92,h=mode==='round'?r.height*.68:r.height*.92,pad=Math.round(w*.07);
+  Object.assign(box.style,{left:r.left+(r.width-w)/2+'px',top:r.top+(r.height-h)/2+'px',width:w+'px',height:h+'px',
+    padding:pad+'px',borderRadius:mode==='round'?Math.round(w*.16)+'px':'10px'});
+}
+addEventListener('resize',fitDlg);
+function dlg(html){const el=$('dlg');el.innerHTML=`<div class="box">${html}</div>`;el.hidden=false;fitDlg();el.onclick=e=>{if(e.target===el||e.target.dataset.close!==undefined)el.hidden=true};return el}
 const escH=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function openWifi(){
   menuOpen=false;
