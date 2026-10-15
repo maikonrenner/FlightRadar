@@ -29,7 +29,9 @@ O projeto tem duas partes:
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Aviso legal sobre o rádio da torre](#aviso-legal-sobre-o-rádio-da-torre)
 - [Próximos passos](#próximos-passos)
+- [Contribuições e melhorias](#contribuições-e-melhorias)
 - [Créditos](#créditos)
+- [Licença](#licença)
 
 ---
 
@@ -199,7 +201,7 @@ A320 YYZ      ← tipo do avião + destino (quando já carregado)
 | Zone d'alerte | 2 km · 3.000 pés / **5 km · 5.000 pés** / 10 km · 10.000 pés | Tamanho da zona de alerta. |
 | Carte de fond | ligado/desligado | Mapa escuro no fundo. |
 | Avions au sol | ligado/desligado | Mostra os aviões no chão (cinza, etiqueta "SOL"). |
-| Tour de contrôle | Arrêt → canal 1 → canal 2 → … | Toca o rádio da torre no PC (precisa do `server.py`). Mostra **"PC hors ligne"** se o PC não responder. |
+| Tour de contrôle | canal tocando ou *Arrêt* | Abre a **janela de canais** da torre (veja abaixo). Mostra **"PC hors ligne"** se o PC não responder. |
 | Style | Contrôleur / Classique | Estilo da tela redonda. |
 | Unités | km / mi | Unidades do cartão e do alcance clássico. |
 | Écran | Rond / Rectangulaire | Tela redonda (AMOLED) ou retangular (CYD). |
@@ -249,7 +251,9 @@ cp radar/opensky_credentials.example.json radar/opensky_credentials.json
 
 ### Áudio da torre
 1. Coloque o endereço do PC em `PC_URL` no `secrets.h` (ex.: `http://192.168.1.10:8080`).
-2. No radar: **⚙ → Radar → Tour de contrôle**. Cada toque passa para o próximo canal; depois do último, desliga.
+2. No radar: **⚙ → Radar → Tour de contrôle**. Abre uma janela com os canais **agrupados por aeroporto**, do mais perto para o mais longe:
+   - toque num canal para ouvir (ele fica em verde com 🔊);
+   - toque nele de novo, ou em **■ Arrêter le son**, para parar.
 3. O `server.py`:
    - procura os **aeroportos grandes até 150 km** (médios até 60 km) da posição do aparelho ([OurAirports](https://ourairports.com));
    - descobre quais canais existem na LiveATC pelos links `.pls` oficiais (cache em `radar/cache/`);
@@ -333,8 +337,29 @@ FlightRadar/
 
 ---
 
+## Contribuições e melhorias
+
+Este é um projeto aberto e **melhorias são muito bem-vindas**! Algumas formas de ajudar:
+
+- 🐛 **Encontrou um problema?** Abra uma [issue](https://github.com/maikonrenner/FlightRadar/issues) descrevendo o que aconteceu, a placa usada e, se possível, o log do monitor serial (115200 baud).
+- 💡 **Tem uma ideia?** Sugestões de recursos também entram como issue — principalmente as da lista de [Próximos passos](#próximos-passos).
+- 🔧 **Quer mudar o código?** Faça um *fork*, crie um branch (`git checkout -b minha-melhoria`), teste na placa e abra um *pull request* explicando o que mudou e como testou.
+- 🌍 **Mapeie a sua região no BeaconDB** (ex.: app [NeoStumbler](https://github.com/mjaakko/NeoStumbler) no Android): melhora a localização por Wi-Fi do radar — e de todo mundo.
+- 🌐 **Traduções**: a tela está em francês; versões em português e inglês seriam ótimas.
+
+Ao contribuir:
+- **nunca** inclua senhas, chaves ou a posição da sua casa (`secrets.h` e `opensky_credentials.json` ficam fora do Git);
+- mantenha a tela desenhada só com primitivas simples (linhas, círculos, triângulos, texto), para continuar portável para as telas do ESP32;
+- teste a página com `node --check` antes de gravar (um erro de JavaScript deixa a tela em branco).
+
 ## Créditos
 
 - Inspirado no **[Desk Plane Radar](https://makerworld.com/fr/models/3090203-desk-plane-radar-esp32-with-2-screens)** de Noah Thio (MakerWorld) e no **Capsule Radar**. Nenhum código desses projetos foi copiado.
 - Dados: [adsb.lol](https://adsb.lol), [adsbdb](https://www.adsbdb.com), [OpenSky Network](https://opensky-network.org), [OurAirports](https://ourairports.com), [BeaconDB](https://beacondb.net), [OpenStreetMap/Nominatim](https://nominatim.org), [Open-Meteo](https://open-meteo.com), [NOAA Aviation Weather Center](https://aviationweather.gov), [RainViewer](https://www.rainviewer.com), [LiveATC.net](https://www.liveatc.net), mapa © Esri.
 - Bibliotecas: [ArduinoJson](https://arduinojson.org), [Three.js](https://threejs.org), [topojson-client](https://github.com/topojson/topojson-client), [miniaudio](https://github.com/irmen/pyminiaudio).
+
+## Licença
+
+Distribuído sob a **licença MIT** — veja o arquivo [`LICENSE`](LICENSE). Você pode usar, modificar e até vender, desde que mantenha o aviso de copyright.
+
+> A licença cobre **o código deste repositório**. Os dados e serviços usados (adsb.lol, adsbdb, OpenSky, LiveATC, mapas etc.) têm **termos próprios** — em especial, o áudio da LiveATC exige autorização para uso comercial (veja o [aviso legal](#aviso-legal-sobre-o-rádio-da-torre)).

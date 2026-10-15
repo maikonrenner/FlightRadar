@@ -15,7 +15,7 @@ canvas[hidden]{display:none}
 #dlg .box{background:#0e141c;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:16px;width:min(100%,380px);max-height:90vh;overflow:auto;color:#e6edf3}
 #dlg h3{margin:0 0 8px;color:#ffc400}#dlg p{margin:8px 0;font-size:13px}#dlg .dim{color:#7a8794}
 #dlg ul{list-style:none;margin:8px 0;padding:0;max-height:240px;overflow:auto}#dlg li{display:flex;justify-content:space-between;gap:8px;padding:10px 6px;border-bottom:1px solid rgba(255,255,255,.07);cursor:pointer}
-#dlg li:hover{background:rgba(255,255,255,.05)}#dlg input{width:100%;box-sizing:border-box;background:#070b10;color:#e6edf3;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px;font:14px system-ui;margin:4px 0}
+#dlg li:hover{background:rgba(255,255,255,.05)}#dlg li.on{background:rgba(98,245,154,.12);color:#62f59a;font-weight:600}#dlg ul+ul{margin-top:0}#dlg input{width:100%;box-sizing:border-box;background:#070b10;color:#e6edf3;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px;font:14px system-ui;margin:4px 0}
 #dlg button{font:600 13px system-ui;color:#e6edf3;background:#18212c;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:9px 12px;cursor:pointer;margin-top:6px}#dlg button.go{background:#ffc400;color:#111;border-color:#ffc400}
 #dlg .row{display:flex;gap:8px;align-items:center}#dlg .row input{flex:1}
 #round{width:min(calc(100vw - 60px),calc(100vh - 60px),520px);aspect-ratio:1;border-radius:50%;box-shadow:0 0 0 12px #1b1f24,0 0 0 14px #2c333b}
@@ -314,10 +314,7 @@ async function menuTap(x,y){
   else if(i===2){await fetch('/zone',{method:'POST'});poll()}
   else if(i===3){mapOn=!mapOn;savePref()}
   else if(i===4){groundOn=!groundOn;savePref()}
-  else if(i===5){   // torre: Arret -> canal 1 -> canal 2 -> ... -> Arret (canais do aeroporto mais proximo)
-    const order=atcFeeds.slice(0,6).map(f=>f.mount),k=atc.on?order.indexOf(atc.feed)+1:0;
-    k<order.length?atcCall('start',order[k]):atcCall('stop');
-  }
+  else if(i===5)openTower();   // abre a lista de canais (mais facil de escolher que alternar tocando)
   else if(i===6){style=style==='atc'?'classic':'atc';savePref()}
   else if(i===7){units=units==='metric'?'imperial':'metric';savePref()}
   else if(i===8)setMode(mode==='round'?'rect':'round');
@@ -364,6 +361,26 @@ async function openWifi(){
         el.querySelector('.box').innerHTML=`<h3>Connexion…</h3><p>Le radar redémarre et se connecte à <b>${escH(n.ssid)}</b>.</p><p class="dim">Remettez votre téléphone sur ce réseau et ouvrez <b>http://radar.local</b>. Si le mot de passe est faux, le radar revient au mode configuration (réseau ${escH(D.apName||'Radar-XXXX')}).</p>`;
       }};
   }catch(e){el.querySelector('#wl').innerHTML='<li class="dim">Le radar ne répond pas.</li>'}
+}
+// ---------- torre de controle: janela com os canais dos aeroportos proximos, um toque para ouvir
+function openTower(){
+  menuOpen=false;
+  const el=dlg('<h3>Tour de contrôle</h3><div id="tw"></div><button data-close>Fermer</button>');
+  const render=busy=>{
+    const box=el.querySelector('#tw');if(!box)return;
+    if(!atc.reach){box.innerHTML='<p class="dim">Le PC avec <b>server.py</b> ne répond pas. Le son de la tour est joué par le PC.</p>';return}
+    if(!atcFeeds.length){box.innerHTML=`<p class="dim">${feedsPending?'Recherche des canaux près de vous…':'Aucun canal trouvé près de vous.'}</p>`;if(feedsPending)setTimeout(()=>{loadFeeds().then(()=>render())},4000);return}
+    // agrupado por aeroporto, do mais perto para o mais longe
+    const groups=[];for(const f of atcFeeds){let g=groups.find(g=>g.icao===f.icao);if(!g)groups.push(g={icao:f.icao,feeds:[]});g.feeds.push(f)}
+    box.innerHTML=(atc.on?`<p>En écoute : <b>${escH(feedName(atc.feed))}</b></p><button id="ts" class="go">■ Arrêter le son</button>`:'<p class="dim">Choisissez un canal pour l’écouter sur les haut-parleurs du PC.</p>')
+      +groups.map(g=>`<p class="dim" style="margin:12px 0 0">${escH(g.icao)}</p><ul>${g.feeds.map(f=>`<li data-m="${escH(f.mount)}"${atc.on&&atc.feed===f.mount?' class="on"':''}><span>${escH(f.title.replace(g.icao,'').trim()||f.title)}</span><span>${atc.on&&atc.feed===f.mount?'🔊':busy===f.mount?'…':'▶'}</span></li>`).join('')}</ul>`).join('')
+      +'<p class="dim">Le silence est normal : on n’entend quelque chose que quand un pilote ou le contrôleur parle.</p>';
+    const ts=box.querySelector('#ts');if(ts)ts.onclick=async()=>{await atcCall('stop');render()};
+    box.onclick=async e=>{const li=e.target.closest('li[data-m]');if(!li)return;const m=li.dataset.m;
+      if(atc.on&&atc.feed===m){await atcCall('stop');render();return}   // tocar no canal que esta tocando = parar
+      render(m);await atcCall('start',m);render()};
+  };
+  atcCall('status').then(()=>render());render();
 }
 function openPosition(){
   menuOpen=false;
