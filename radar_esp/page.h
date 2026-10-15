@@ -55,10 +55,10 @@ async function loadAirports(lat,lon){
   }catch(e){aptsKey='';aptsRetry=Date.now()+120000}   // falhou (sem internet): tenta de novo em 2 min, sem martelar
 }
 let pref={};try{pref=JSON.parse(localStorage.getItem('radar_esp')||'{}')}catch(e){}
-let units=pref.units||'metric',rangeIdx=pref.rangeIdx??2,mode=pref.mode||'round',mapOn=pref.mapOn??true,style=pref.style||'atc',groundOn=pref.groundOn??false,actx=null,menuOpen=false;
+let units=pref.units||'metric',rangeIdx=pref.rangeIdx??2,mode=pref.mode||'round',mapOn=true,style=pref.style||'atc',groundOn=pref.groundOn??false,sweepTags=pref.sweepTags??true,actx=null,menuOpen=false;
 // torre de controle: o ESP repassa o audio da LiveATC (porta 81) e o navegador toca no aparelho que abriu a pagina
 let apShown=false;let atc={on:false,feed:null,live:false};
-const savePref=()=>{try{localStorage.setItem('radar_esp',JSON.stringify({units,rangeIdx,mode,mapOn,style,groundOn}))}catch(e){}};
+const savePref=()=>{try{localStorage.setItem('radar_esp',JSON.stringify({units,rangeIdx,mode,mapOn,style,groundOn,sweepTags}))}catch(e){}};
 let D={planes:[],alerting:0,alertOn:true,soundOn:true},recvAt=0,selHex=null,lastAlert=0,conn=false;
 const info={};   // hex -> {model, orig, dest} vindo do ESP (/info)
 const hist=new Map();let histAt=0;   // rastro: ultimas posicoes (km x/y a partir de casa)
@@ -142,7 +142,7 @@ function drawRound(planes){
   inRange.forEach(p=>{const r=p.dist/rKm*RMAX,a=p.brg*Math.PI/180,x=CX+r*Math.sin(a),y=CY-r*Math.cos(a),isSel=p.hex===selHex;if(isSel)sel=p;
     planeIcon(d,x,y,p.trk,isSel?11:8,isSel?'#fff':p.ground?'#8a939c':altColor(p.alt));
     if(isSel){d.drawCircle(x,y,16,C.accent,2);d.text(p.flight||p.hex,x+11,y-10,12,C.accent,'left',true)}
-    else{const k=sweepFade(sw,a);if(k>0)d.text(p.flight||p.hex,x+11,y-10,12,`rgba(200,210,220,${k.toFixed(2)})`)}
+    else{const k=sweepTags?sweepFade(sw,a):1;if(k>0)d.text(p.flight||p.hex,x+11,y-10,12,`rgba(200,210,220,${k.toFixed(2)})`)}
     R.blips.push({x,y,hex:p.hex})});
   // topo: hora + contagem e alcance (embaixo fica a engrenagem)
   const t=new Date();d.text(`${String(t.getHours()).padStart(2,'0')} h ${String(t.getMinutes()).padStart(2,'0')}  ·  ${avions(inRange.length)} · ${rLbl} ${uD}`,CX,18,12,C.dim,'center',true);
@@ -199,10 +199,13 @@ function drawATC(planes){
     const fl=String(Math.round(p.alt/100)).padStart(3,'0'),arw=p.vr>300?'↑':p.vr<-300?'↓':' ',inf=info[p.hex];
     const lines=p.ground?[p.flight||p.hex,'SOL']   // no solo: so indicativo
       :[p.flight||p.hex,`${fl}${arw}${String(Math.round(p.gs/10)).padStart(2,'0')}`,(p.type||'')+(inf&&inf.dest?' '+inf.dest.code:'')].filter(Boolean);
-    tags.push({x,y,lines,isSel,col:alert?(blink?A.alert:'#ff9a9a'):isSel?A.sel:p.ground?A.gnd:A.tag});
+    // com "Etiquettes: Balayage" os dados aparecem quando a varredura passa e somem em ~1,6 s
+    // (selecionado e em alerta ficam sempre); com "Fixes" ficam sempre na tela
+    tags.push({x,y,lines,isSel,k:isSel||alert||!sweepTags?1:sweepFade(sw,a),col:alert?(blink?A.alert:'#ff9a9a'):isSel?A.sel:p.ground?A.gnd:A.tag});
     R.blips.push({x,y,hex:p.hex});
   }
-  // etiquetas por ultimo: escolhe entre 4 posicoes (NE, NO, SE, SO) a que menos cobre as ja colocadas
+  // etiquetas por ultimo: escolhe entre 4 posicoes (NE, NO, SE, SO) a que menos cobre as ja colocadas.
+  // Todas entram no calculo (mesmo as apagadas), assim a etiqueta nao pula de lugar enquanto some.
   d.g.font='700 11px ui-monospace,Consolas,monospace';
   const placed=[],ov=(a,b)=>Math.max(0,Math.min(a[2],b[2])-Math.max(a[0],b[0]))*Math.max(0,Math.min(a[3],b[3])-Math.max(a[1],b[1]));
   for(const tg of tags.sort((a,b)=>b.isSel-a.isSel)){
@@ -216,10 +219,13 @@ function drawATC(planes){
       if(cost===0)break;
     }
     placed.push(best.box);
+    if(tg.k<=0)continue;
     const[bx,by,bx2,by2]=best.box;
+    d.g.globalAlpha=tg.k;
     d.drawLine(tg.x+best.sx*4,tg.y+best.sy*4,best.sx>0?bx-2:bx2+2,best.sy<0?by2:by,tg.col);
     tg.lines.forEach((s,i)=>d.mono(s,bx,by+6+i*12,11,tg.col));
   }
+  d.g.globalAlpha=1;
   const t=new Date();d.mono(`${String(t.getUTCHours()).padStart(2,'0')}${String(t.getUTCMinutes()).padStart(2,'0')}Z`,CX,13,12,A.roseTxt,'center');
   zoomButtons(d,C);
   if(sel)drawCard(d,C,sel);
@@ -259,9 +265,16 @@ function live(p,dt){let x=p.dist*Math.sin(p.brg*Math.PI/180),y=p.dist*Math.cos(p
   return{...p,dist:Math.hypot(x,y),brg:(Math.atan2(x,y)*180/Math.PI+360)%360}}
 // ---------- engrenagem + menu de reglages (desenhados na propria tela, como no aparelho)
 const GEAR={round:[233,453,10],rect:[309,12,6]};   // redonda: embaixo, as 6 horas, entre a rosa dos ventos e a borda
+const MUTE={round:[265,453,10],rect:[294,12,6]};   // botao de mudo do radio, ao lado da engrenagem (sempre visivel)
 const MENU={round:{x:98,y:58,w:270,h:352,top:76,tabs:100,sub:121,row0:144,step:24.6,fs:13},
   rect:{x:28,y:2,w:264,h:236,top:11,tabs:25,sub:38,row0:52,step:16.8,fs:10}};
 let menuTab='radar';
+function drawMute(d,[x,y,r]){   // alto-falante; mudo = vermelho com X; radio desligado = apagado
+  const c=atcMuted?'#ff6b6b':atc.on?'#7a8794':'#3a4550',g=d.g;g.fillStyle=c;g.beginPath();
+  g.moveTo(x-r*.9,y-r*.35);g.lineTo(x-r*.45,y-r*.35);g.lineTo(x,y-r*.8);g.lineTo(x,y+r*.8);g.lineTo(x-r*.45,y+r*.35);g.lineTo(x-r*.9,y+r*.35);g.fill();
+  if(atcMuted){d.drawLine(x+r*.25,y-r*.4,x+r*.95,y+r*.4,c,r*.2);d.drawLine(x+r*.25,y+r*.4,x+r*.95,y-r*.4,c,r*.2)}
+  else{g.strokeStyle=c;g.lineWidth=r*.16;for(const k of[.45,.85]){g.beginPath();g.arc(x+r*.05,y,r*k,-.8,.8);g.stroke()}}
+}
 function drawGear(d,[x,y,r]){
   for(let k=0;k<8;k++){const a=k*Math.PI/4;d.drawLine(x+Math.cos(a)*r*.55,y+Math.sin(a)*r*.55,x+Math.cos(a)*r,y+Math.sin(a)*r,'#7a8794',r*.32)}
   d.fillCircle(x,y,r*.68,'#7a8794');d.fillCircle(x,y,r*.3,'#000');
@@ -269,10 +282,9 @@ function drawGear(d,[x,y,r]){
 const SRC={wifi:'Wi-Fi',ip:'IP',manuel:'manuel',secrets:'config'};
 const menuRows=()=>menuTab==='radar'?[
   ['Son',D.soundOn,'sw'],['Alerte de proximité',D.alertOn,'sw'],['Zone d’alerte',`${D.aKm||5} km · ${fr(D.aFt||5000)} pi`,'val'],
-  ['Carte de fond',mapOn,'sw'],['Avions au sol',groundOn,'sw'],
+  ['Avions au sol',groundOn,'sw'],
   ['Tour de contrôle',atc.on?feedName(atc.feed):atcFeeds.length?'Arrêt':feedsPending?'recherche…':'aucune','val'],
-  ['Style',style==='atc'?'Contrôleur':'Classique','val'],['Unités',units==='metric'?'km':'mi','val'],
-  ['Écran',mode==='round'?'Rond':'Rectangulaire','val'],['Tester le bip','▶','val'],['Fermer','','close']]:[
+  ['Style',style==='atc'?'Contrôleur':'Classique','val'],['Étiquettes',sweepTags?'Balayage':'Fixes','val'],['Unités',units==='metric'?'km':'mi','val'],['Fermer','','close']]:[
   ['Réseau Wi-Fi',D.ap?'à configurer':(D.ssid||'—'),'val'],
   ['Position',`${D.city||'?'} (${SRC[D.src]||D.src||'?'})`,'val'],
   ['Précision',D.acc?(D.acc>=1000?`± ${Math.round(D.acc/1000)} km`:`± ${D.acc} m`):'—','info'],
@@ -311,14 +323,12 @@ async function menuTap(x,y){
   if(i===0){await fetch('/sound',{method:'POST'});poll()}
   else if(i===1){await fetch('/alert',{method:'POST'});poll()}
   else if(i===2){await fetch('/zone',{method:'POST'});poll()}
-  else if(i===3){mapOn=!mapOn;savePref()}
-  else if(i===4){groundOn=!groundOn;savePref()}
-  else if(i===5)openTower();   // abre a lista de canais (mais facil de escolher que alternar tocando)
-  else if(i===6){style=style==='atc'?'classic':'atc';savePref()}
+  else if(i===3){groundOn=!groundOn;savePref()}
+  else if(i===4)openTower();   // abre a lista de canais (mais facil de escolher que alternar tocando)
+  else if(i===5){style=style==='atc'?'classic':'atc';savePref()}
+  else if(i===6){sweepTags=!sweepTags;savePref()}   // dados aparecem com a varredura ou ficam fixos
   else if(i===7){units=units==='metric'?'imperial':'metric';savePref()}
-  else if(i===8)setMode(mode==='round'?'rect':'round');
-  else if(i===9){fetch('/beep',{method:'POST'});beep(true)}
-  else if(i===10)menuOpen=false;
+  else if(i===8)menuOpen=false;
 }
 // ---------- torre de controle: o ESP descobre os canais da LiveATC dos aeroportos perto da casa (fica salvo
 // na flash) e repassa o audio; a frequencia de radio so tem som quando alguem fala: silencio e normal
@@ -338,7 +348,7 @@ async function loadFeeds(){
     feedsPending=!!j.pending;feedsKey=key;
   }catch(e){}
 }
-let atcAudio=null,atcAn=null,atcBuf=null;
+let atcAudio=null,atcAn=null,atcBuf=null,atcGain=null,atcMuted=false;
 function atcPlay(m){
   atcStop();
   try{actx=actx||new AudioContext();actx.resume()}catch(e){}
@@ -347,9 +357,12 @@ function atcPlay(m){
   a.onerror=a.onended=()=>{if(atcAudio!==a)return;atc.live=false;setTimeout(()=>{if(atcAudio===a)atcPlay(m)},5000)};   // caiu: reconecta
   atcAudio=a;atc={on:true,feed:m,live:false};
   // analisador para a onda de fala (o ESP libera CORS, senao o navegador entregaria silencio)
-  try{const s=actx.createMediaElementSource(a);atcAn=actx.createAnalyser();atcAn.fftSize=2048;s.connect(atcAn);atcAn.connect(actx.destination);atcBuf=new Float32Array(atcAn.fftSize)}catch(e){atcAn=null}
+  try{const s=actx.createMediaElementSource(a);atcAn=actx.createAnalyser();atcAn.fftSize=2048;atcGain=actx.createGain();atcGain.gain.value=atcMuted?0:1;
+    s.connect(atcAn);atcAn.connect(atcGain);atcGain.connect(actx.destination);atcBuf=new Float32Array(atcAn.fftSize)}catch(e){atcAn=atcGain=null;a.muted=atcMuted}
   a.play().catch(()=>{});
 }
+// mudo: o radio continua conectado e a onda de fala continua aparecendo, so o som e cortado
+function atcMute(){atcMuted=!atcMuted;if(atcGain)atcGain.gain.value=atcMuted?0:1;else if(atcAudio)atcAudio.muted=atcMuted}
 function atcStop(){
   if(atcAudio){const a=atcAudio;atcAudio=null;a.onerror=a.onended=null;a.pause();a.removeAttribute('src');a.load()}
   atcAn=null;atc={on:false,feed:null,live:false};voice.lv=[];voice.talk=false;
@@ -460,6 +473,7 @@ function draw(){
   if(mode!=='round')drawRect(planes);else if(style==='atc')drawATC(planes);else drawRound(planes);
   drawVoice(d,!!selHex&&D.planes.some(p=>p.hex===selHex));
   drawGear(d,GEAR[mode]);
+  drawMute(d,MUTE[mode]);
   if(menuOpen)drawMenu(d);
 }
 
@@ -470,6 +484,7 @@ async function loadInfo(p){
 function touch(cv,e,S,isRound){
   const b=cv.getBoundingClientRect(),W=cv.width,H=cv.height,x=(e.clientX-b.left)*W/b.width,y=(e.clientY-b.top)*H/b.height;
   if(menuOpen){menuTap(x,y);return}
+  const mu=MUTE[mode];if(Math.hypot(x-mu[0],y-mu[1])<=mu[2]+4){atcMute();return}   // mudo vale tambem para o proximo canal
   const g=GEAR[mode];if(Math.hypot(x-g[0],y-g[1])<=g[2]+10){menuOpen=true;return}
   const hit=isRound?(([bx,by,r])=>Math.hypot(x-bx,y-by)<=r+8):(r=>x>=r[0]&&x<=r[0]+r[2]&&y>=r[1]&&y<=r[1]+r[3]);
   if(hit(S.minus)){rangeIdx=Math.max(0,rangeIdx-1);savePref();return}
@@ -485,13 +500,27 @@ function setMode(m){mode=m;savePref();$('round').hidden=m!=='round';$('rect').hi
 // Som ligado por padrao. O navegador so libera audio depois do primeiro toque na pagina:
 // esse primeiro toque (em qualquer lugar) ja destrava o bipe.
 addEventListener('pointerdown',()=>{try{actx=actx||new AudioContext();actx.resume()}catch(e){}},{capture:true});
-function beep(force){if(!actx||!(force||D.soundOn))return;const o=actx.createOscillator(),v=actx.createGain();o.frequency.value=880;v.gain.setValueAtTime(.15,actx.currentTime);v.gain.exponentialRampToValueAtTime(.001,actx.currentTime+.4);o.connect(v).connect(actx.destination);o.start();o.stop(actx.currentTime+.4)}
+function beep(force,hz=880,sec=.4,vol=.15){if(!actx||!(force||D.soundOn))return;const o=actx.createOscillator(),v=actx.createGain();o.frequency.value=hz;v.gain.setValueAtTime(vol,actx.currentTime);v.gain.exponentialRampToValueAtTime(.001,actx.currentTime+sec);o.connect(v).connect(actx.destination);o.start();o.stop(actx.currentTime+sec)}
+// aviao novo entrando no alcance da tela: bipe curto e agudo (diferente do alerta). Na 1a leitura, ao trocar
+// o zoom ou ao ligar "avions au sol" so memoriza quem ja esta la; o mesmo aviao nao bipa de novo por 5 min.
+let inView=null,viewKey='';const newBeepAt=new Map();
+function newPlanes(alertBeep){
+  const rKm=mode==='round'&&style==='atc'?ATC_NM[rangeIdx]*1.852:RANGES[units][rangeIdx]*KM_PER[units],key=[mode,style,units,rangeIdx,groundOn].join();
+  const now=Date.now(),cur=new Set(D.planes.filter(p=>p.dist<=rKm&&(!p.ground||groundOn)).map(p=>p.hex));
+  if(inView&&key===viewKey&&[...cur].some(h=>!inView.has(h)&&now-(newBeepAt.get(h)||0)>300000)){
+    for(const h of cur)if(!inView.has(h))newBeepAt.set(h,now);
+    if(!alertBeep)beep(false,1320,.12,.1);   // um bipe por leitura, mesmo se entrarem varios (o alerta tem prioridade)
+  }
+  for(const[h,t]of newBeepAt)if(now-t>300000)newBeepAt.delete(h);
+  inView=cur;viewKey=key;
+}
 async function poll(){
   try{
     D=await(await fetch('/planes',{cache:'no-store'})).json();recvAt=performance.now()-D.age*1000;conn=true;
     if(D.lat||D.lon){loadAirports(D.lat,D.lon);loadFeeds()}
     if(D.ap&&!apShown){apShown=true;openWifi()}   // sem Wi-Fi configurado: ja abre a lista de redes
-    if(D.alerting>lastAlert&&D.alertOn)beep();lastAlert=D.alerting;
+    const alertBeep=D.alerting>lastAlert&&D.alertOn;if(alertBeep)beep();lastAlert=D.alerting;
+    newPlanes(alertBeep);
     for(const h of hist.keys())if(!D.planes.some(p=>p.hex===h))hist.delete(h);
   }catch(e){conn=false}
 }

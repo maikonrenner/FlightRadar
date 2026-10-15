@@ -41,7 +41,7 @@ O projeto tem duas partes:
 - 🛰️ **Tráfego ao vivo** num raio de ~200 km, atualizado a cada 15 s e com a posição de cada avião **estimada** entre as leituras (rumo + velocidade), para os alvos andarem suavemente.
 - 🖥️ **Dois estilos de tela redonda** (466×466, feita para a Waveshare AMOLED 1,75"):
   - **Contrôleur** (padrão): como o scope de um controlador — alvo quadrado, **rastro** das posições anteriores, **vetor** de 1 minuto, **etiqueta de dados** de 3 linhas, **pistas reais** dos aeroportos, anéis em milhas náuticas, rosa dos ventos em graus, hora UTC e varredura cinza.
-  - **Classique**: radar verde com varredura; o nome do voo aparece quando a varredura passa e some em seguida.
+  - **Classique**: radar verde com varredura; o nome do voo aparece quando a varredura passa e some em seguida (no Contrôleur também, com **Étiquettes: Balayage**).
 - 📋 **Toque num avião** → cartão com **companhia aérea**, **modelo**, **origem → destino**, altitude, velocidade e distância.
 - 🔔 **Alerta de aproximação** com zonas configuráveis, posição conferida a cada segundo e memória para não repetir (detalhes [abaixo](#alerta-de-aproximação)). Borda da tela pisca em vermelho, LED da placa pisca e o buzzer apita.
 - 📻 **Rádio da torre de controle** do aeroporto mais próximo (o próprio ESP32 repassa o áudio, sem PC), com uma **onda de fala** no radar que só aparece enquanto alguém está falando.
@@ -195,16 +195,16 @@ A320 YYZ      ← tipo do avião + destino (quando já carregado)
 ### Aba **Radar**
 | Item | Valores | O que faz |
 |---|---|---|
-| Son | ligado/desligado | Bipe do alerta (página e buzzer). **Ligado por padrão.** |
+| Son | ligado/desligado | Bipes da página e do buzzer: alerta e **avião novo** entrando no alcance da tela (bipe curto e agudo, no máximo 1 a cada 5 min por avião). **Ligado por padrão.** |
 | Alerte de proximité | ligado/desligado | Liga/desliga o alerta. **Ligado por padrão.** |
 | Zone d'alerte | 2 km · 3.000 pés / **5 km · 5.000 pés** / 10 km · 10.000 pés | Tamanho da zona de alerta. |
-| Carte de fond | ligado/desligado | Mapa escuro no fundo. |
 | Avions au sol | ligado/desligado | Mostra os aviões no chão (cinza, etiqueta "SOL"). |
 | Tour de contrôle | canal tocando ou *Arrêt* | Abre a **janela de canais** da torre (veja [Áudio da torre](#áudio-da-torre)). |
 | Style | Contrôleur / Classique | Estilo da tela redonda. |
+| Étiquettes | **Balayage** / Fixes | *Balayage*: os dados do avião aparecem quando a varredura passa e somem em ~1,6 s (o avião tocado e o em alerta ficam sempre). *Fixes*: dados sempre na tela. |
 | Unités | km / mi | Unidades do cartão e do alcance clássico. |
-| Écran | Rond / Rectangulaire | Tela redonda (AMOLED) ou retangular (CYD). |
-| Tester le bip | ▶ | Bipe de teste na página e no buzzer. |
+
+O mapa de fundo fica sempre ligado. Ao lado da engrenagem fica o **botão de mudo do rádio** 🔈: corta o som da torre sem desconectar (a onda de fala continua aparecendo); fica vermelho quando mudo.
 
 ### Aba **Appareil**
 | Item | O que mostra/faz |
