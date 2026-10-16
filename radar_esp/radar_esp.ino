@@ -53,10 +53,15 @@ int beepsLeft = 0;
 unsigned long nextBeep = 0;
 void beep(int n) { beepsLeft = n; nextBeep = 0; }
 
-struct Plane { char hex[7], flight[9], reg[11], type[5]; int alt, vr; bool ground, al; float gs, trk, distKm, brg, x, y; };
+// gs/trk = NAN quando a adsb.lol nao manda (a pagina nao inventa vetor); sp = segundos desde a ultima posicao
+struct Plane { char hex[7], flight[9], reg[11], type[5], sq[5]; int alt, vr; bool ground, al; float gs, trk, distKm, brg, x, y; uint8_t sp; };
 Plane planes[MAX_PLANES];
 int nPlanes = 0;
 unsigned long lastPoll = 0, dataAt = 0, backoffUntil = 0, lastCheck = 0;
+// a busca dos avioes roda numa tarefa propria (a rede nunca trava a pagina nem os toques); o mutex protege planes[]
+SemaphoreHandle_t planesMux;
+volatile bool pollNow = true;
+int lastHttp = 0;   // ultimo erro da adsb.lol (0 = ok), mostrado no estado ADS-B da tela
 // memoria de alertas: quem ja alertou e quando (evita repetir quando o aviao oscila na borda da zona)
 struct AlertMem { char hex[7]; unsigned long at; bool inside; };
 AlertMem mem[24];
@@ -78,7 +83,8 @@ void saveLocation(const char* src) {
   locSrc = src;
   prefs.putFloat("lat", homeLat); prefs.putFloat("lon", homeLon); prefs.putString("city", homeCity);
   prefs.putString("src", locSrc); prefs.putInt("acc", locAcc);
-  nPlanes = 0; lastPoll = 0;   // busca os avioes do novo lugar ja
+  xSemaphoreTake(planesMux, portMAX_DELAY); nPlanes = 0; xSemaphoreGive(planesMux);
+  pollNow = true;   // busca os avioes do novo lugar ja
   Serial.printf("Casa (%s): %s (%.4f, %.4f) +-%d m\n", src, homeCity.c_str(), homeLat, homeLon, locAcc);
 }
 
@@ -182,6 +188,8 @@ void sendWifiScan() {
   server.send(200, "application/json", out);
 }
 
+Plane fresh[MAX_PLANES];   // leitura nova; so vai para planes[] (sob o mutex) quando estiver completa
+
 void poll() {
   char url[96];
   snprintf(url, sizeof url, "http://api.adsb.lol/v2/point/%.4f/%.4f/%d", homeLat, homeLon, RADIUS_NM);
@@ -192,7 +200,7 @@ void poll() {
   http.setUserAgent("radar-de-mesa/1.0 (ESP32)");  // a adsb.lol recusa (403) o agente padrao do ESP32
   int code = http.GET();
   if (code != 200) {
-    Serial.printf("adsb.lol HTTP %d\n", code); http.end(); fetchOk = false;
+    Serial.printf("adsb.lol HTTP %d\n", code); http.end(); fetchOk = false; lastHttp = code;
     if (code == 429) backoffUntil = millis() + 60000;  // muitas consultas: espera 1 min
     return;
   }
@@ -200,31 +208,36 @@ void poll() {
   // Le so os campos usados, direto da rede: cabe na RAM mesmo com centenas de avioes.
   JsonDocument filter;
   JsonObject f = filter["ac"][0].to<JsonObject>();
-  for (const char* k : {"hex", "flight", "r", "t", "alt_baro", "baro_rate", "geom_rate", "gs", "track", "dst", "dir"}) f[k] = true;
+  for (const char* k : {"hex", "flight", "r", "t", "alt_baro", "baro_rate", "geom_rate", "gs", "track", "dst", "dir", "squawk", "seen_pos"}) f[k] = true;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
-  if (err) { Serial.printf("JSON: %s\n", err.c_str()); fetchOk = false; return; }
+  if (err) { Serial.printf("JSON: %s\n", err.c_str()); fetchOk = false; lastHttp = -2; return; }
 
   int n = 0;
   for (JsonObject a : doc["ac"].as<JsonArray>()) {
     if (n >= MAX_PLANES || a["dst"].isNull() || a["dir"].isNull()) continue;
-    Plane& p = planes[n++];
+    Plane& p = fresh[n++];
     copyStr(p.hex, sizeof p.hex, a["hex"]);
     copyStr(p.flight, sizeof p.flight, a["flight"]);
     copyStr(p.reg, sizeof p.reg, a["r"]);
     copyStr(p.type, sizeof p.type, a["t"]);
+    copyStr(p.sq, sizeof p.sq, a["squawk"]);
+    p.sp = (uint8_t)constrain((int)(a["seen_pos"] | 0.0f), 0, 255);
     p.ground = a["alt_baro"].is<const char*>();   // "ground"
     p.alt = p.ground ? 0 : (a["alt_baro"] | 0);
     p.vr = a["baro_rate"] | (a["geom_rate"] | 0);   // ft/min (subindo > 0)
-    p.gs = a["gs"] | 0.0f;
-    p.trk = a["track"] | 0.0f;
+    p.gs = a["gs"].isNull() ? NAN : a["gs"].as<float>();
+    p.trk = a["track"].isNull() ? NAN : a["track"].as<float>();
     p.distKm = (a["dst"] | 0.0f) * 1.852f;      // dst vem em milhas nauticas
     p.brg = a["dir"] | 0.0f;
     p.x = p.distKm * sinf(p.brg * DEG_TO_RAD); p.y = p.distKm * cosf(p.brg * DEG_TO_RAD);   // km leste/norte de casa
     p.al = false;
   }
-  nPlanes = n; fetchOk = true; dataAt = millis();
+  xSemaphoreTake(planesMux, portMAX_DELAY);
+  memcpy(planes, fresh, sizeof(Plane) * n);
+  nPlanes = n; fetchOk = true; dataAt = millis(); lastHttp = 0;
+  xSemaphoreGive(planesMux);
   checkAlerts();
   Serial.printf("%d avioes (heap livre %u)\n", n, ESP.getFreeHeap());
 }
@@ -240,12 +253,14 @@ int findMem(const char* hex, bool create) {   // indice em mem[] (-1 = nao achou
 }
 
 void checkAlerts() {
+  xSemaphoreTake(planesMux, portMAX_DELAY);
   const Zone z = ZONES[zoneIdx];
   float dt = min(60.0f, (millis() - dataAt) / 1000.0f);
   int inside = 0;
   for (int i = 0; i < nPlanes; i++) {
     Plane& p = planes[i];
-    float t = p.trk * DEG_TO_RAD, k = p.gs * 1.852f / 3600 * dt;
+    bool mv = !isnan(p.gs) && !isnan(p.trk);
+    float t = mv ? p.trk * DEG_TO_RAD : 0, k = mv ? p.gs * 1.852f / 3600 * dt : 0;
     float d = p.ground ? 1e9 : hypotf(p.x + k * sinf(t), p.y + k * cosf(t));
     int mi = findMem(p.hex, false);
     AlertMem* m = mi < 0 ? nullptr : &mem[mi];
@@ -264,6 +279,7 @@ void checkAlerts() {
     if (in) inside++;
   }
   alerting = inside;
+  xSemaphoreGive(planesMux);
 }
 
 void savePrefs() { prefs.putBool("alert", alertOn); prefs.putBool("sound", soundOn); prefs.putInt("zone", zoneIdx); }
@@ -271,6 +287,7 @@ void savePrefs() { prefs.putBool("alert", alertOn); prefs.putBool("sound", sound
 void sendPlanes() {
   JsonDocument d;
   d["lat"] = homeLat; d["lon"] = homeLon; d["city"] = homeCity;
+  if (lastHttp) d["err"] = lastHttp;
   d["src"] = locSrc; d["acc"] = locAcc; d["ssid"] = wifiSsid; d["ap"] = apMode; d["apName"] = apName;
   d["online"] = WiFi.status() == WL_CONNECTED;
   d["ok"] = dataAt && millis() - dataAt < 90000;  // um 429 isolado nao apaga o radar
@@ -278,14 +295,20 @@ void sendPlanes() {
   d["alerting"] = alertOn ? alerting : 0; d["alertOn"] = alertOn; d["soundOn"] = soundOn;
   d["aKm"] = ZONES[zoneIdx].km; d["aFt"] = ZONES[zoneIdx].ft; d["zone"] = zoneIdx;
   JsonArray arr = d["planes"].to<JsonArray>();
+  xSemaphoreTake(planesMux, portMAX_DELAY);
   for (int i = 0; i < nPlanes; i++) {
     const Plane& p = planes[i];
     JsonObject o = arr.add<JsonObject>();
     o["hex"] = p.hex; o["flight"] = p.flight; o["reg"] = p.reg; o["type"] = p.type;
-    o["alt"] = p.alt; o["vr"] = p.vr; o["ground"] = p.ground; o["gs"] = p.gs; o["trk"] = p.trk;
+    o["alt"] = p.alt; o["vr"] = p.vr; o["ground"] = p.ground;
+    if (!isnan(p.gs)) o["gs"] = p.gs;
+    if (!isnan(p.trk)) o["trk"] = p.trk;
+    if (p.sq[0]) o["sq"] = p.sq;
+    if (p.sp) o["sp"] = p.sp;
     if (p.al) o["al"] = true;
     o["dist"] = serialized(String(p.distKm, 2)); o["brg"] = serialized(String(p.brg, 1));
   }
+  xSemaphoreGive(planesMux);
   String out;
   serializeJson(d, out);
   server.sendHeader("Cache-Control", "no-store");
@@ -479,8 +502,19 @@ void atcRelayTask(void*) {
   }
 }
 
+void pollTask(void*) {
+  for (;;) {
+    unsigned long now = millis();
+    if (WiFi.status() == WL_CONNECTED && (pollNow || now - lastPoll > POLL_MS) && (long)(now - backoffUntil) >= 0) {
+      pollNow = false; lastPoll = now; poll();
+    }
+    delay(200);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+  planesMux = xSemaphoreCreateMutex();
   prefs.begin("radar", false);
   alertOn = prefs.getBool("alert", true); soundOn = prefs.getBool("sound", true); zoneIdx = constrain(prefs.getInt("zone", 1), 0, 2);
   pinMode(LED, OUTPUT);
@@ -532,13 +566,13 @@ void setup() {
   server.begin();
   atcSrv.begin();
   xTaskCreatePinnedToCore(atcRelayTask, "atcRelay", 12288, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(pollTask, "adsb", 12288, NULL, 1, NULL, 1);
 }
 
 void loop() {
   if (apMode) dns.processNextRequest();
   server.handleClient();
   unsigned long now = millis();
-  if (WiFi.status() == WL_CONNECTED && (now - lastPoll > POLL_MS || lastPoll == 0) && (long)(now - backoffUntil) >= 0) { lastPoll = now; poll(); }
 
   static bool btnPrev = HIGH;
   static unsigned long btnT = 0;

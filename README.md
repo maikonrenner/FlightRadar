@@ -40,9 +40,12 @@ O projeto tem duas partes:
 ### No aparelho (ESP32)
 - 🛰️ **Tráfego ao vivo** num raio de ~200 km, atualizado a cada 15 s e com a posição de cada avião **estimada** entre as leituras (rumo + velocidade), para os alvos andarem suavemente.
 - 🖥️ **Dois estilos de tela redonda** (466×466, feita para a Waveshare AMOLED 1,75"):
-  - **Contrôleur** (padrão): como o scope de um controlador — alvo quadrado, **rastro** das posições anteriores, **vetor** de 1 minuto, **etiqueta de dados** de 3 linhas, **pistas reais** dos aeroportos, anéis em milhas náuticas, rosa dos ventos em graus, hora UTC e varredura cinza.
+  - **Contrôleur** (padrão): como o scope de um controlador — alvo quadrado, **rastro** configurável, **vetor de previsão** (30/60/120 s, nunca inventado quando falta velocidade ou rumo), **etiqueta de dados** de 3 linhas (`ACA432` / `118↓370` / `A320 YYZ`, com o destino buscado em segundo plano), **pistas reais** com o **eixo prolongado 10 NM** nos aeroportos com torre, 4 anéis em milhas náuticas, zona de alerta tracejada, rosa dos ventos em graus e varredura cinza.
+    - **Estado ao vivo** no topo (`● ADS-B · 50 NM`: verde em dia, laranja atrasado, vermelho perdido) e `17 AVIONS · 1432Z` embaixo; faixas de aviso para **dados antigos**, **ESP fora do ar** e **squawk de emergência** (7500/7600/7700, com bipe).
+    - Cada posição tem a idade real (`seen_pos` da adsb.lol): a estimativa para em 45 s e o alvo com posição de mais de 30 s aparece **vazado** ("coast"), como nos radares de verdade.
+    - Etiquetas **sem sobreposição**: 6 posições testadas, desviando de outras etiquetas, dos alvos, dos botões e do cartão; cada uma mantém o lado escolhido. Com muito tráfego, só os mais próximos ficam com 3 linhas.
   - **Classique**: radar verde com varredura; o nome do voo aparece quando a varredura passa e some em seguida (no Contrôleur também, com **Étiquettes: Balayage**).
-- 📋 **Toque num avião** → cartão com **companhia aérea**, **modelo**, **origem → destino**, altitude, velocidade e distância.
+- 📋 **Toque num avião** → cartão **VOL SÉLECTIONNÉ** com companhia, modelo, origem → destino, altitude, velocidade (kt), cap e distância (NM); "—" quando o dado falta e aviso quando a posição é antiga. **Toque longo** (ou toque no cartão) → todos os detalhes (matrícula, dono, código hex, taxa vertical, relèvement, transponder…). Dois alvos colados → uma **lista para escolher**. **+** aproxima, **−** afasta.
 - 🔔 **Alerta de aproximação** com zonas configuráveis, posição conferida a cada segundo e memória para não repetir (detalhes [abaixo](#alerta-de-aproximação)). Borda da tela pisca em vermelho, LED da placa pisca e o buzzer apita.
 - 📻 **Rádio da torre de controle** do aeroporto mais próximo (o próprio ESP32 repassa o áudio, sem PC), com uma **onda de fala** no radar que só aparece enquanto alguém está falando.
 - 📶 **Configuração de Wi-Fi pela própria tela** e **modo de configuração** automático (para levar o aparelho a qualquer lugar).
@@ -202,18 +205,20 @@ A320 YYZ      ← tipo do avião + destino (quando já carregado)
 | Tour de contrôle | canal tocando ou *Arrêt* | Abre a **janela de canais** da torre (veja [Áudio da torre](#áudio-da-torre)). |
 | Style | Contrôleur / Classique | Estilo da tela redonda. |
 | Étiquettes | **Balayage** / Fixes | *Balayage*: os dados do avião aparecem quando a varredura passa e somem em ~1,6 s (o avião tocado e o em alerta ficam sempre). *Fixes*: dados sempre na tela. |
-| Unités | km / mi | Unidades do cartão e do alcance clássico. |
+| Traînée | Aucune / **Courte** (5) / Moyenne (10) / Longue (20) | Pontos do rastro (um a cada 4 s); um salto grande nos dados recomeça o rastro. |
+| Vecteur | 30 / **60** / 120 s | Até onde o vetor projeta o avião. |
+| Unités | km / mi | Unidades do estilo Classique (o Contrôleur usa sempre NM, kt e pés). |
 
 O mapa de fundo fica sempre ligado. Ao lado da engrenagem fica o **botão de mudo do rádio** 🔈: corta o som da torre sem desconectar (a onda de fala continua aparecendo); fica vermelho quando mudo.
 
 ### Aba **Appareil**
 | Item | O que mostra/faz |
 |---|---|
-| Réseau Wi-Fi | Rede atual. Toque para ver as redes disponíveis e trocar (com senha). |
+| Réseau Wi-Fi | Rede atual. Toque para ver as redes disponíveis, escolha uma e digite a senha no **teclado virtual** da tela (letras, ⇧ maiúsculas, `?123` números e símbolos, 👁 mostra a senha). O mesmo teclado aparece na busca de cidade e no código do aeroporto. |
 | Position | Cidade e origem da posição (Wi-Fi, IP, manual). Toque para detectar de novo ou escolher a cidade. |
 | Précision | Precisão estimada da posição. |
-| Aéroport (radio) | Aeroporto mais próximo com rádio na LiveATC. |
-| Canaux de la tour | Quantos canais de rádio foram encontrados perto. |
+| Aéroport (radio) | **Automático** (o mais perto com canais na LiveATC) ou escolhido: toque para ver os próximos ou digitar qualquer código OACI (o ESP procura os canais). Também pelo link *changer* na janela da torre. |
+| Canaux de la tour | Quantos canais esse aeroporto tem. |
 
 ---
 
