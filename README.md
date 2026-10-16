@@ -1,4 +1,6 @@
-# ✈️ FlightRadar — Radar de Mesa com ESP32
+# 🛡️ SENTINEL 643 — Tactical Aviation Radar
+
+**Radar de aviões de mesa com ESP32** (repositório *FlightRadar*). Versão atual do firmware: **S643 Mk I 1.0**.
 
 Um radar de aviões de verdade para a mesa: um **ESP32** busca sozinho os aviões que estão voando perto de você, mostra tudo numa tela no estilo do **monitor de um controlador de tráfego aéreo**, apita quando um avião passa baixo e perto da sua casa e ainda toca o **rádio da torre de controle** do aeroporto mais próximo.
 
@@ -9,7 +11,9 @@ O projeto tem duas partes:
 | **Radar de mesa** (o aparelho) | [`radar_esp/`](radar_esp) | Firmware do ESP32: busca os aviões, calcula o alerta de aproximação e serve a tela do radar em `http://radar.local`. |
 | **Estação no PC** (opcional) | [`radar/`](radar) | `server.py` + um radar **3D estilo Flightradar24** (Three.js) com tráfego mundial, clima e rotas. |
 
-> A interface do aparelho está em **francês** (feito em Québec 🇨🇦). Este README está em português.
+> A interface do aparelho está em **francês** (feito em Québec 🇨🇦), com opção de **português** e **inglês** (⚙ → Appareil → Langue). Este README está em português.
+>
+> O número 643 é uma homenagem pessoal. Projeto independente e não oficial.
 
 ---
 
@@ -38,7 +42,7 @@ O projeto tem duas partes:
 ## O que ele faz
 
 ### No aparelho (ESP32)
-- 🛰️ **Tráfego ao vivo** num raio de ~200 km, atualizado a cada 15 s e com a posição de cada avião **estimada** entre as leituras (rumo + velocidade), para os alvos andarem suavemente.
+- 🛰️ **Tráfego ao vivo** num raio que acompanha o zoom (até 260 km), atualizado a cada 15 s e com a posição de cada avião **estimada** entre as leituras (rumo + velocidade), para os alvos andarem suavemente.
 - 🖥️ **Dois estilos de tela redonda** (466×466, feita para a Waveshare AMOLED 1,75"):
   - **Contrôleur** (padrão): como o scope de um controlador — alvo quadrado, **rastro** configurável, **vetor de previsão** (30/60/120 s, nunca inventado quando falta velocidade ou rumo), **etiqueta de dados** de 3 linhas (`ACA432` / `118↓370` / `A320 YYZ`, com o destino buscado em segundo plano), **pistas reais** com o **eixo prolongado 10 NM** nos aeroportos com torre, 4 anéis em milhas náuticas, zona de alerta tracejada, rosa dos ventos em graus e varredura cinza.
     - **Estado ao vivo** no topo (`● ADS-B · 50 NM`: verde em dia, laranja atrasado, vermelho perdido) e `17 AVIONS · 1432Z` embaixo; faixas de aviso para **dados antigos**, **ESP fora do ar** e **squawk de emergência** (7500/7600/7700, com bipe).
@@ -48,7 +52,15 @@ O projeto tem duas partes:
 - 📋 **Toque num avião** → cartão **VOL SÉLECTIONNÉ** com companhia, modelo, origem → destino, altitude, velocidade (kt), cap e distância (NM); "—" quando o dado falta e aviso quando a posição é antiga. **Toque longo** (ou toque no cartão) → todos os detalhes (matrícula, dono, código hex, taxa vertical, relèvement, transponder…). Dois alvos colados → uma **lista para escolher**. **+** aproxima, **−** afasta.
 - 🔔 **Alerta de aproximação** com zonas configuráveis, posição conferida a cada segundo e memória para não repetir (detalhes [abaixo](#alerta-de-aproximação)). Borda da tela pisca em vermelho, LED da placa pisca e o buzzer apita.
 - 📻 **Rádio da torre de controle** do aeroporto mais próximo (o próprio ESP32 repassa o áudio, sem PC), com uma **onda de fala** no radar que só aparece enquanto alguém está falando.
-- 📶 **Configuração de Wi-Fi pela própria tela** e **modo de configuração** automático (para levar o aparelho a qualquer lugar).
+- 📶 **Configuração de Wi-Fi pela própria tela**, com **teclado virtual**, até **3 redes salvas** (entra na mais forte) e **reconexão automática**: se a rede cai ou o aparelho ligou antes dela, ele volta sozinho quando ela reaparece.
+- 🎯 **Seguir um avião**: dois toques nele e o scope passa a ficar centrado no avião (norte para cima), mostrando a distância até a casa.
+- ➤ **Setas na borda** apontando para os aviões além do zoom (com contador); tocar numa seta afasta o zoom.
+- 🔎 **Filtros**: faixa de altitude, categoria ADS-B (leves, comerciais, gros porteurs, helicópteros, planadores/ULM, drones), só militares, aviões no solo e busca por indicativo, matrícula ou tipo.
+- 🕐 **Relógio** quando não há aviões na tela (hora, data, UTC, METAR e estado da conexão); o radar volta assim que um avião aparece.
+- 🌦️ **METAR decodificado** do aeroporto da rádio: categoria de voo (VFR/MVFR/IFR/LIFR), vento, visibilidade, nuvens, fenômenos, temperatura e QNH.
+- 🔧 **Diagnóstico** (memória, Wi-Fi, tempo de cada consulta ADS-B, falhas) e **atualização pelo Wi-Fi (OTA)**, sem cabo.
+- 🌐 Interface em **francês, português ou inglês**, **rotação da tela** (0/90/180/270°) e **texto maior**.
+- 🚀 Abertura **SENTINEL 643** com checagem da ligação, do Wi-Fi e do ADS-B.
 - 📍 **Localização sem GPS**: pelas redes Wi-Fi vizinhas, pelo IP ou pela cidade digitada.
 - 🗺️ Mapa escuro de fundo, aviões no solo (opcional), km ou milhas, tela redonda ou retangular (CYD 2,8").
 - 💾 Som, alerta, zona, Wi-Fi e posição ficam **salvos na flash** do ESP32.
@@ -138,11 +150,17 @@ e preencha:
 
 ### 3. Gravar
 ```bash
-arduino-cli compile --upload -p COM3 --fqbn esp32:esp32:esp32 radar_esp
+arduino-cli compile --upload -p COM3 --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs radar_esp
 ```
-(troque `COM3` pela porta da sua placa; no Linux/Mac algo como `/dev/ttyUSB0`). Na Arduino IDE: placa **ESP32 Dev Module**, abra `radar_esp/radar_esp.ino` e clique em *Carregar*.
+(troque `COM3` pela porta da sua placa; no Linux/Mac algo como `/dev/ttyUSB0`). Na Arduino IDE: placa **ESP32 Dev Module**, *Partition Scheme* **Minimal SPIFFS (1.9MB APP with OTA)**, abra `radar_esp/radar_esp.ino` e clique em *Carregar*.
 
-O firmware ocupa ~90% da partição padrão de 1,3 MB. Se você aumentar o código, escolha o esquema de partição **"Huge APP (3MB No OTA)"**.
+**Partição obrigatória: "Minimal SPIFFS (1.9MB APP with OTA)"** (`PartitionScheme=min_spiffs`). Ela tem duas áreas de programa de 1,9 MB, o que permite a atualização pelo Wi-Fi; o firmware ocupa ~65%. Wi-Fi, posição e canais salvos ficam numa área separada e não se perdem ao trocar de partição.
+
+### Atualização pelo Wi-Fi (OTA)
+Depois da primeira gravação pelo cabo, as próximas podem ser sem fio:
+1. Gere o arquivo: `arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --output-dir build radar_esp` (ou, na Arduino IDE, *Sketch → Exportar binário compilado*).
+2. No radar: **⚙ → Appareil → Mise à jour**, escolha `radar_esp.ino.bin` e toque em **Envoyer** (barra de progresso).
+3. O ESP32 confere o arquivo antes de trocar: um arquivo inválido é recusado e o aparelho continua na versão atual. Deu certo, ele reinicia sozinho (~10 s).
 
 ### 4. Abrir o radar
 No celular ou PC **na mesma rede**: **http://radar.local** (ou o IP que aparece no monitor serial, 115200 baud).
@@ -152,9 +170,9 @@ No celular ou PC **na mesma rede**: **http://radar.local** (ou o IP que aparece 
 ## Primeira configuração: Wi-Fi e posição
 
 ### Wi-Fi (para levar o radar para outro lugar)
-1. Se o aparelho não conhece nenhuma rede (ou a senha mudou), depois de ~15 s ele cria a rede **`Radar-XXXX`** (sem senha).
+1. Se o aparelho não acha nenhuma das redes salvas (ou a senha mudou), depois de ~15 s ele cria a rede **`S643-XXXX`** (sem senha). Ele continua procurando as redes salvas (a cada 1 a 5 min) e sai sozinho do modo de configuração quando uma aparece.
 2. Conecte o celular nela. A página do radar abre sozinha (portal cativo) ou acesse **http://192.168.4.1**.
-3. A lista de redes aparece: escolha a sua, digite a senha e toque em **Connecter**.
+3. A lista de redes aparece: escolha a sua, digite a senha no **teclado virtual** e toque em **Connecter**. Até 3 redes ficam salvas (casa, trabalho, celular…); a mais nova vai para o topo e o ✕ esquece uma.
 4. O radar reinicia e entra na rede nova. Volte o celular para essa rede e abra **http://radar.local**.
 
 Para trocar de rede depois: **⚙ → Appareil → Réseau Wi-Fi**.
@@ -176,10 +194,14 @@ O centro do radar, o mapa, as pistas e o aeroporto do rádio dependem da posiç�
 
 | Gesto | Ação |
 |---|---|
-| Tocar num avião | Seleciona e abre o cartão (companhia, modelo, rota, altitude, velocidade, distância) |
+| Tocar num avião | Seleciona e abre o cartão (companhia, modelo, rota, altitude, velocidade, cap, distância) |
+| **Dois toques** num avião | **Seguir**: o scope fica centrado nele (faixa dourada *SUIVI*; tocar na faixa para de seguir) |
+| **Toque longo** num avião (ou no cartão) | Todos os detalhes (matrícula, dono, categoria, taxa vertical, transponder…) e o botão *Suivre* |
+| Dois aviões colados | Abre uma lista para escolher |
+| **Seta na borda** | Afasta o zoom (há aviões além do alcance; o número ao lado é a quantidade) |
 | Tocar fora de um avião | Desmarca |
-| **−** / **+** nas laterais | Alcance: **5 · 10 · 25 · 50 · 100 NM** (Contrôleur) ou **10 · 25 · 50 · 100 · 200 km** (Classique) |
-| **⚙** embaixo (6 horas) | Abre as configurações |
+| **+** / **−** nas laterais (+ aproxima) | Alcance: **5 · 10 · 25 · 50 · 100 NM** (Contrôleur) ou **10 · 25 · 50 · 100 · 200 km** (Classique) |
+| **⚙** embaixo (logo depois das 6 horas) | Abre as configurações; o 🔈 logo antes das 6 é o mudo do rádio |
 
 ### Etiqueta de dados (estilo Contrôleur)
 ```
@@ -198,13 +220,13 @@ A320 YYZ      ← tipo do avião + destino (quando já carregado)
 ### Aba **Radar**
 | Item | Valores | O que faz |
 |---|---|---|
-| Son | ligado/desligado | Bipes da página e do buzzer: alerta e **avião novo** entrando no alcance da tela (bipe curto e agudo, no máximo 1 a cada 5 min por avião). **Ligado por padrão.** |
-| Alerte de proximité | ligado/desligado | Liga/desliga o alerta. **Ligado por padrão.** |
-| Zone d'alerte | 2 km · 3.000 pés / **5 km · 5.000 pés** / 10 km · 10.000 pés | Tamanho da zona de alerta. |
-| Avions au sol | ligado/desligado | Mostra os aviões no chão (cinza, etiqueta "SOL"). |
+| Son | ligado/desligado | Liga/desliga todos os bipes (página e buzzer). |
+| Alertes | Désactivées / **Importantes** / Toutes | Abre a janela de alertas (veja [Alertas](#alerta-de-aproximação)). |
+| Filtres | aucun / actifs | Altitude, categorias, só militares, aviões no solo e busca por texto. Mostra quantos aviões passam no filtro. |
 | Tour de contrôle | canal tocando ou *Arrêt* | Abre a **janela de canais** da torre (veja [Áudio da torre](#áudio-da-torre)). |
+| Météo | categoria · vento | METAR decodificado do aeroporto da rádio. |
 | Style | Contrôleur / Classique | Estilo da tela redonda. |
-| Étiquettes | **Balayage** / Fixes | *Balayage*: os dados do avião aparecem quando a varredura passa e somem em ~1,6 s (o avião tocado e o em alerta ficam sempre). *Fixes*: dados sempre na tela. |
+| Étiquettes | **Balayage** / Fixes | *Balayage*: os dados do avião aparecem quando a varredura passa e somem em ~1,6 s (o avião tocado, o seguido e o em alerta ficam sempre). *Fixes*: dados sempre na tela. |
 | Traînée | Aucune / **Courte** (5) / Moyenne (10) / Longue (20) | Pontos do rastro (um a cada 4 s); um salto grande nos dados recomeça o rastro. |
 | Vecteur | 30 / **60** / 120 s | Até onde o vetor projeta o avião. |
 | Unités | km / mi | Unidades do estilo Classique (o Contrôleur usa sempre NM, kt e pés). |
@@ -214,11 +236,14 @@ O mapa de fundo fica sempre ligado. Ao lado da engrenagem fica o **botão de mud
 ### Aba **Appareil**
 | Item | O que mostra/faz |
 |---|---|
-| Réseau Wi-Fi | Rede atual. Toque para ver as redes disponíveis, escolha uma e digite a senha no **teclado virtual** da tela (letras, ⇧ maiúsculas, `?123` números e símbolos, 👁 mostra a senha). O mesmo teclado aparece na busca de cidade e no código do aeroporto. |
-| Position | Cidade e origem da posição (Wi-Fi, IP, manual). Toque para detectar de novo ou escolher a cidade. |
-| Précision | Precisão estimada da posição. |
+| Réseau Wi-Fi | Rede atual e as **redes salvas** (até 3, ✕ esquece). Toque numa rede disponível e digite a senha no **teclado virtual** da tela (letras, ⇧ maiúsculas, `?123` números e símbolos, 👁 mostra a senha). O mesmo teclado aparece na busca de cidade, no código do aeroporto e na busca dos filtros. |
+| Position | Cidade, origem e precisão da posição (Wi-Fi, IP, manual). Toque para detectar de novo ou escolher a cidade. |
 | Aéroport (radio) | **Automático** (o mais perto com canais na LiveATC) ou escolhido: toque para ver os próximos ou digitar qualquer código OACI (o ESP procura os canais). Também pelo link *changer* na janela da torre. |
-| Canaux de la tour | Quantos canais esse aeroporto tem. |
+| Langue | Français / Português / English (vale para este navegador). |
+| Rotation | 0° / 90° / 180° / 270°: gira a tela e os toques (para montar o aparelho com o USB-C para qualquer lado). |
+| Texte | Normal / Grand: etiquetas e textos do scope maiores. |
+| Diagnostic | Versão, tempo ligado, motivo do último reinício, Wi-Fi (dBm), memória livre / maior bloco / mínimo atingido, PSRAM, tamanho do programa, tempo e falhas das consultas ADS-B, raio consultado e quadros/s da página. |
+| Mise à jour | Atualização do firmware pelo Wi-Fi (veja [OTA](#atualização-pelo-wi-fi-ota)). |
 
 ---
 
@@ -226,7 +251,20 @@ O mapa de fundo fica sempre ligado. Ao lado da engrenagem fica o **botão de mud
 
 O alerta foi feito para tocar **só quando um avião passa perto e baixo de verdade** — morar a ~15 km de um aeroporto grande disparava o tempo todo com regras simples.
 
-- **Zona**: raio horizontal + teto de altitude (padrão **5 km abaixo de 5.000 pés**).
+**⚙ → Radar → Alertes** escolhe o que merece aviso:
+
+| Modo | Proximidade | Emergência (squawk) | Avião novo na tela |
+|---|---|---|---|
+| Désactivées | — | — | — |
+| **Importantes** (padrão) | ✔ | ✔ | — |
+| Toutes | ✔ | ✔ | ✔ (bipe curto) |
+
+- **Raio** (2 / 5 / 10 km) e **altitude máxima** (3 000 / 5 000 / 10 000 ft) da zona de proximidade, escolhidos separadamente.
+- **Emergências**: squawk **7500** (sequestro), **7600** (falha de rádio) e **7700** (emergência) em qualquer distância — faixa vermelha na tela, 5 bipes no buzzer.
+- **Volume dos bipes** da página (fraco / médio / forte) e **histórico dos últimos 10 alertas**.
+- O botão **BOOT** da placa liga/desliga os alertas.
+
+- **Zona**: raio horizontal + teto de altitude (padrão **5 km abaixo de 5 000 pés**).
 - **Posição conferida a cada 1 s** com a posição **estimada agora** (rumo + velocidade desde a última leitura), não com o dado de até 15 s atrás.
 - **Uma vez por avião**: depois de alertar, o mesmo avião só alerta de novo **20 minutos** depois.
 - **Histerese**: para "sair" da zona o avião precisa passar de **125 % do raio** (ou 300 pés acima do teto) — evita liga-desliga na borda.
@@ -294,12 +332,18 @@ Endpoints HTTP servidos pelo ESP32 (úteis para integrar com outras coisas):
 | Método | Rota | Descrição |
 |---|---|---|
 | GET | `/` | Tela do radar |
-| GET | `/planes` | Aviões, posição da casa, estado do alerta/Wi-Fi |
+| GET | `/planes?r=<km>` | Aviões, posição da casa, alertas e Wi-Fi. `r` = alcance da tela: o raio consultado na adsb.lol é `min(260, max(12, 1,4 × r))` km |
 | GET | `/info?hex=…&cs=…` | Modelo, companhia, origem e destino de um avião |
-| POST | `/sound` · `/alert` · `/zone` | Alterna som / alerta / zona de alerta |
+| POST | `/sound` | Alterna o som |
+| POST | `/alertcfg` (`m` modo 0-2, `r` raio 0-2, `c` teto 0-2, `e` emergência 0/1, `n` avião novo 0/1) | Configura os alertas |
+| GET | `/alerts` | Últimos 10 alertas |
+| GET | `/metar?icao=CYUL` | METAR (cache de 10 min) |
+| GET | `/diag` | Diagnóstico (memória, Wi-Fi, consultas ADS-B) |
+| POST | `/update` (arquivo `.bin`) | Atualização do firmware (OTA) |
 | POST | `/beep` | Bipe de teste |
 | GET | `/wifi/scan` | Redes Wi-Fi visíveis |
-| POST | `/wifi/save` (`ssid`, `pass`) | Salva a rede e reinicia |
+| POST | `/wifi/save` (`ssid`, `pass`) | Salva a rede (até 3) e reinicia |
+| GET | `/wifi/list` · POST `/wifi/forget` (`ssid`) | Redes salvas / esquecer uma |
 | POST | `/locate` (`method=wifi\|ip`) | Detecta a posição |
 | POST | `/location` (`lat`, `lon`, `city`) | Define a posição manualmente |
 | GET | `/atc/feeds?icao=CYUL,CYHU` | Canais da LiveATC desses aeroportos (`pending` = descoberta em andamento) |
